@@ -1254,8 +1254,125 @@ namespace afd
     }
 
     void MainFrame::OnValidation(wxCommandEvent&)
-    {                        
-        SyntaxCheckIsOK(false); 
+    {
+        // --- C++ syntax check (existing) ---
+        // Use doNotShowOnSuccess=true so we collect the result silently
+        // and combine it with the Python result in a single dialog.
+        if (!m_specification.IsLoaded())
+        {
+            return;
+        }
+
+        std::string cppError;
+        ValidateFunction validateFunction;
+        const bool cppOk = validateFunction.SyntaxCheckIsOK(
+            m_metaModel, m_specification.ToText(), cppError);
+
+        // --- Python meta model validation (validate_afs.py) ---
+        if (!IsPythonToolingAvailable())
+        {
+            // Python not available — show only the C++ result
+            if (cppOk)
+            {
+                wxMessageBox("No syntax errors found.",
+                             kApplicationName, wxOK | wxICON_INFORMATION, this);
+            }
+            else
+            {
+                wxMessageBox("Syntax error found:\n\n" + ToWx(cppError) +
+                             "\n\n(Meta model validation unavailable: " +
+                             GetPythonUnavailableMessage() + ")",
+                             kApplicationName, wxOK | wxICON_ERROR, this);
+            }
+            return;
+        }
+
+        const wxString afsPath = ToWx(m_specification.GetSourcePath());
+        if (afsPath.IsEmpty())
+        {
+            // File not saved yet — show only the C++ result
+            if (cppOk)
+            {
+                wxMessageBox("No syntax errors found.\n\n"
+                             "(Save the file to also run meta model validation.)",
+                             kApplicationName, wxOK | wxICON_INFORMATION, this);
+            }
+            else
+            {
+                wxMessageBox("Syntax error found:\n\n" + ToWx(cppError),
+                             kApplicationName, wxOK | wxICON_ERROR, this);
+            }
+            return;
+        }
+
+        wxArrayString output, errors;
+        const long pyRc = RunPythonScript(
+            "validate_afs.py",
+            wxString::Format("\"%s\"", afsPath),
+            output, errors);
+
+        // Extract only the meaningful lines from the output:
+        // [OK] lines, [FAIL] lines and their description line immediately after.
+        wxString pyResult;
+        bool nextLineIsDescription = false;
+        for (const auto& line : output)
+        {
+            const wxString trimmed = line.Strip(wxString::both);
+            if (trimmed.Contains("[OK]"))
+            {
+                // Extract just the summary info lines (Function, Inputs, etc.)
+                if (trimmed.StartsWith("Function") ||
+                    trimmed.StartsWith("Meta model") ||
+                    trimmed.StartsWith("Inputs") ||
+                    trimmed.StartsWith("Outputs") ||
+                    trimmed.StartsWith("Parameters") ||
+                    trimmed.StartsWith("Runnables") ||
+                    trimmed.Contains("[OK]"))
+                {
+                    pyResult += trimmed + "\n";
+                }
+                nextLineIsDescription = false;
+            }
+            else if (trimmed.Contains("[FAIL]") || trimmed.Contains("[SCHEMA ERRORS]") || trimmed.Contains("[SEMANTIC ERRORS]"))
+            {
+                pyResult += trimmed + "\n";
+                nextLineIsDescription = true;
+            }
+            else if (nextLineIsDescription && !trimmed.IsEmpty() && !trimmed.StartsWith("-"))
+            {
+                pyResult += "    " + trimmed + "\n";
+                nextLineIsDescription = false;
+            }
+            else
+            {
+                nextLineIsDescription = false;
+            }
+        }
+        for (const auto& line : errors)
+        {
+            const wxString trimmed = line.Strip(wxString::both);
+            if (!trimmed.IsEmpty())
+            {
+                pyResult += trimmed + "\n";
+            }
+        }
+
+        // --- Single combined dialog ---
+        if (cppOk && pyRc == 0)
+        {
+            wxMessageBox("All checks passed.\n\n" + pyResult,
+                         kApplicationName, wxOK | wxICON_INFORMATION, this);
+        }
+        else if (!cppOk)
+        {
+            wxMessageBox("C++ syntax error found:\n\n" + ToWx(cppError),
+                         kApplicationName, wxOK | wxICON_ERROR, this);
+        }
+        else
+        {
+            wxMessageBox("Meta model validation FAILED.\n\n" + pyResult,
+                         kApplicationName, wxOK | wxICON_ERROR, this);
+        }
     }
 
     bool MainFrame::SyntaxCheckIsOK(bool doNotShowOnSuccess, const std::string& contextMessage)
@@ -1316,28 +1433,89 @@ namespace afd
 
     void MainFrame::OnCreateAPI(wxCommandEvent&)
     {
-        const wxArrayString languages = {"C", "C++", "Rust"};
-        wxSingleChoiceDialog dialog(this, "Select target language", "Create API", languages);
+        if (!m_specification.IsLoaded())
+        {
+            return;
+        }
+
+        if (!IsPythonToolingAvailable())
+        {
+            wxMessageBox(GetPythonUnavailableMessage(),
+                         kApplicationName, wxOK | wxICON_WARNING, this);
+            return;
+        }
+
+        const wxString afsPath = ToWx(m_specification.GetSourcePath());
+        if (afsPath.IsEmpty())
+        {
+            wxMessageBox("Save the .afs file before generating an adapter.\n\n"
+                         "The generator needs a saved file on disk.",
+                         kApplicationName, wxOK | wxICON_WARNING, this);
+            return;
+        }
+
+        // --- Language selection ---
+        const wxArrayString languages = {"C++", "C", "Rust"};
+        wxSingleChoiceDialog langDialog(this, "Select target language for adapter generation:",
+                                        "Create API", languages);
 
         wxString lastLanguage;
         wxConfigBase::Get()->Read(kCreateApiLanguageConfigKey, &lastLanguage);
         const int lastIndex = languages.Index(lastLanguage);
         if (lastIndex != wxNOT_FOUND)
         {
-            dialog.SetSelection(lastIndex);
+            langDialog.SetSelection(lastIndex);
         }
 
-        if (dialog.ShowModal() != wxID_OK)
+        if (langDialog.ShowModal() != wxID_OK)
         {
             return;
         }
 
-        wxConfigBase::Get()->Write(kCreateApiLanguageConfigKey, dialog.GetStringSelection());
+        const wxString selectedLanguage = langDialog.GetStringSelection();
+        wxConfigBase::Get()->Write(kCreateApiLanguageConfigKey, selectedLanguage);
         wxConfigBase::Get()->Flush();
 
-        wxMessageBox("Create API for " + dialog.GetStringSelection() + ":\n\nNOT IMPLEMENTED",
-                     kApplicationName,
-                     wxOK | wxICON_INFORMATION, this);
+        // Map display name to --language argument value
+        wxString languageArg;
+        if (selectedLanguage == "C++")       languageArg = "cpp";
+        else if (selectedLanguage == "C")    languageArg = "c";
+        else if (selectedLanguage == "Rust") languageArg = "rust";
+        else                                 languageArg = "cpp";
+
+        // --- Output directory selection ---
+        wxDirDialog dirDialog(this,
+                              "Select output directory for generated adapter",
+                              wxFileName(afsPath).GetPath(),
+                              wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+        if (dirDialog.ShowModal() != wxID_OK)
+        {
+            return;
+        }
+
+        const wxString outputDir = dirDialog.GetPath();
+
+        wxArrayString output, errors;
+        const long rc = RunPythonScript(
+            "generate_adapter.py",
+            wxString::Format("\"%s\" --language %s --output-dir \"%s\"",
+                             afsPath, languageArg, outputDir),
+            output, errors);
+
+        wxString result;
+        for (const auto& line : output) { result += line + "\n"; }
+        for (const auto& line : errors) { result += line + "\n"; }
+
+        if (rc == 0)
+        {
+            wxMessageBox("Adapter generated successfully (" + selectedLanguage + ").\n\n" + result,
+                         kApplicationName, wxOK | wxICON_INFORMATION, this);
+        }
+        else
+        {
+            wxMessageBox("Adapter generation FAILED.\n\n" + result,
+                         kApplicationName, wxOK | wxICON_ERROR, this);
+        }
     }
 
     void MainFrame::OnAbout(wxCommandEvent&) 
@@ -1766,6 +1944,62 @@ namespace afd
         }
 
         return outputFile;
+    }
+
+    // -------------------------------------------------------------------------
+    // Python tooling helpers
+    // -------------------------------------------------------------------------
+
+    wxString MainFrame::GetPythonExecutable()
+    {
+        return wxString::FromUTF8(AFD_PYTHON_EXECUTABLE);
+    }
+
+    bool MainFrame::IsPythonToolingAvailable()
+    {
+        const wxString python = GetPythonExecutable();
+        if (python.IsEmpty() || !wxFileName::FileExists(python))
+        {
+            return false;
+        }
+        // Check that the tools/ directory with the scripts was copied next to the executable
+        const wxString toolsDir = wxString::FromUTF8(AFD_TOOLS_DIR);
+        return wxFileName::DirExists(toolsDir) &&
+               wxFileName::FileExists(wxFileName(toolsDir, "validate_afs.py").GetFullPath());
+    }
+
+    wxString MainFrame::GetPythonUnavailableMessage()
+    {
+        const wxString python = GetPythonExecutable();
+        if (python.IsEmpty())
+        {
+            return "Python was not found when this application was built.\n\n"
+                   "Activate your Python virtual environment (with pydantic and jinja2 installed) "
+                   "and re-run CMake to enable meta model validation and adapter generation.";
+        }
+        if (!wxFileName::FileExists(python))
+        {
+            return "The Python executable configured at build time is no longer present:\n" +
+                   python + "\n\nRe-run CMake with the virtual environment activated.";
+        }
+        const wxString toolsDir = wxString::FromUTF8(AFD_TOOLS_DIR);
+        return "The tools/ directory was not found next to the executable.\n\n"
+               "Expected: " + toolsDir + "\n\nRebuild the project to copy it.";
+    }
+
+    long MainFrame::RunPythonScript(const wxString& script,
+                                    const wxString& args,
+                                    wxArrayString&  output,
+                                    wxArrayString&  errors)
+    {
+        const wxString python    = GetPythonExecutable();
+        const wxString toolsDir  = wxString::FromUTF8(AFD_TOOLS_DIR);
+        const wxString scriptPath = wxFileName(toolsDir, script).GetFullPath();
+
+        const wxString cmd = wxString::Format(
+            "\"%s\" \"%s\" %s", python, scriptPath, args);
+
+        return wxExecute(cmd, output, errors, wxEXEC_SYNC);
     }
 
     std::string  MainFrame::GetVssToolsVersion()

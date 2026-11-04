@@ -46,45 +46,64 @@ if(NOT VSPEC_EXECUTABLE)
     set(VSPEC_EXECUTABLE "")
 endif()
 
+# ---------------------------------------------------------------------------
+# Python tooling (validate_afs.py / generate_adapter.py)
+# ---------------------------------------------------------------------------
+find_program(AFD_PYTHON_EXECUTABLE
+    NAMES python python3 python.exe python3.exe
+    HINTS
+        "$ENV{VIRTUAL_ENV}/bin"
+        "$ENV{VIRTUAL_ENV}/Scripts"
+        "$ENV{USERPROFILE}/venvs/vss-tools/Scripts"
+        "$ENV{HOME}/venvs/vss-tools/bin"
+)
 
-if(AFD_BUILD_APP)
-    option(ACD_FETCH_WXWIDGETS "Download and build wxWidgets when no installation is found" ON)
+if(NOT AFD_PYTHON_EXECUTABLE)
+    message(WARNING
+        "Python not found - validate_afs.py and generate_adapter.py will be disabled at runtime.")
+    set(AFD_PYTHON_EXECUTABLE "")
+endif()
 
-    # vcpkg and recent wxWidgets installations provide a package config file,
-    # system installations are found through CMake's FindwxWidgets module.
-    find_package(wxWidgets CONFIG QUIET COMPONENTS core base adv)
-    if(NOT wxWidgets_FOUND)
-        find_package(wxWidgets QUIET COMPONENTS core base adv)
+set(AFD_TOOLS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+
+
+option(ACD_FETCH_WXWIDGETS "Download and build wxWidgets when no installation is found" ON)
+
+# vcpkg and recent wxWidgets installations provide a package config file,
+# system installations are found through CMake's FindwxWidgets module.
+find_package(wxWidgets CONFIG QUIET COMPONENTS core base adv)
+if(NOT wxWidgets_FOUND)
+    find_package(wxWidgets QUIET COMPONENTS core base adv)
+endif()
+
+if(wxWidgets_FOUND)
+    if(wxWidgets_USE_FILE)
+        include(${wxWidgets_USE_FILE})
     endif()
+    set(ACD_WX_LIBRARIES ${wxWidgets_LIBRARIES})
+elseif(ACD_FETCH_WXWIDGETS)
+    message(STATUS "wxWidgets not found - building it from source (this takes a while on the first run)")
+    include(FetchContent)
+    set(wxBUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(wxWidgets
+        GIT_REPOSITORY https://github.com/wxWidgets/wxWidgets.git
+        GIT_TAG v3.2.6
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(wxWidgets)
+    set(ACD_WX_LIBRARIES wx::core wx::base)
+else()
+    message(FATAL_ERROR
+        "wxWidgets not found. Install it (vcpkg: 'vcpkg install wxwidgets', "
+        "Linux: 'libwxgtk3.2-dev') or configure with -DACD_FETCH_WXWIDGETS=ON.")
+endif()
 
-    if(wxWidgets_FOUND)
-        if(wxWidgets_USE_FILE)
-            include(${wxWidgets_USE_FILE})
-        endif()
-        set(ACD_WX_LIBRARIES ${wxWidgets_LIBRARIES})
-    elseif(ACD_FETCH_WXWIDGETS)
-        message(STATUS "wxWidgets not found - building it from source (this takes a while on the first run)")
-        include(FetchContent)
-        set(wxBUILD_SHARED OFF CACHE BOOL "" FORCE)
-        set(wxBUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(wxBUILD_SAMPLES OFF CACHE BOOL "" FORCE)
-        FetchContent_Declare(wxWidgets
-            GIT_REPOSITORY https://github.com/wxWidgets/wxWidgets.git
-            GIT_TAG v3.2.6
-            GIT_SHALLOW TRUE)
-        FetchContent_MakeAvailable(wxWidgets)
-        set(ACD_WX_LIBRARIES wx::core wx::base)
-    else()
-        message(FATAL_ERROR
-            "wxWidgets not found. Install it (vcpkg: 'vcpkg install wxwidgets', "
-            "Linux: 'libwxgtk3.2-dev') or configure with -DACD_FETCH_WXWIDGETS=ON.")
-    endif()
-
-    if(WIN32)
-        enable_language(RC)
-        configure_file(src/app_icon.rc.in app_icon.rc @ONLY)
-        set(ACD_WINDOWS_RESOURCES "${CMAKE_CURRENT_BINARY_DIR}/app_icon.rc")
-    endif()
+if(WIN32)
+    enable_language(RC)
+    configure_file(src/app_icon.rc.in app_icon.rc @ONLY)
+    set(ACD_WINDOWS_RESOURCES "${CMAKE_CURRENT_BINARY_DIR}/app_icon.rc")
+endif()
 
     # GUI executable for the Auto API Function Designer application
     add_executable(AutoAPIFunctionDesigner WIN32
@@ -101,63 +120,108 @@ if(AFD_BUILD_APP)
         ${ACD_WINDOWS_RESOURCES}
     )
 
-    target_include_directories(AutoAPIFunctionDesigner PRIVATE src)
-    target_link_libraries(AutoAPIFunctionDesigner PRIVATE ${ACD_WX_LIBRARIES})
-    target_compile_definitions(AutoAPIFunctionDesigner PRIVATE
-        AFD_VSPEC_EXECUTABLE="${VSPEC_EXECUTABLE}")
+target_include_directories(AutoAPIFunctionDesigner PRIVATE src)
+target_link_libraries(AutoAPIFunctionDesigner PRIVATE ${ACD_WX_LIBRARIES})
+target_compile_definitions(AutoAPIFunctionDesigner PRIVATE
+    AFD_VSPEC_EXECUTABLE="${VSPEC_EXECUTABLE}"
+    AFD_PYTHON_EXECUTABLE="${AFD_PYTHON_EXECUTABLE}"
+    AFD_TOOLS_DIR="$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools")
 
-    if(MSVC)
-        target_compile_options(AutoAPIFunctionDesigner PRIVATE /W4 /WX /utf-8)
-        target_compile_definitions(AutoAPIFunctionDesigner PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-        set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT AutoAPIFunctionDesigner)
-    else()
-        target_compile_options(AutoAPIFunctionDesigner PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    endif()
+if(MSVC)
+    target_compile_options(AutoAPIFunctionDesigner PRIVATE /W4 /WX /utf-8)
+    target_compile_definitions(AutoAPIFunctionDesigner PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT AutoAPIFunctionDesigner)
+else()
+    target_compile_options(AutoAPIFunctionDesigner PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
-    set_target_properties(AutoAPIFunctionDesigner PROPERTIES
-        VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:function_designer>")
+set_target_properties(AutoAPIFunctionDesigner PROPERTIES
+    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:function_designer>")
 
-    if(UNIX AND NOT APPLE)
-        set(ACD_LINUX_ICON_COMMAND
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_icon-128x128.png"
-                    "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_icon.png")
-    endif()
+if(UNIX AND NOT APPLE)
+    set(ACD_LINUX_ICON_COMMAND
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_icon-128x128.png"
+                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_icon.png")
+endif()
 
-    # The meta model and the sample specification are picked up next to the executable.
-    add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/examples/autoapiframework_metadata_V04.yaml"
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_meta_model.yaml"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/examples/speed_hazard_detection.afs"
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/speed_hazard_detection.afs"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/examples/vehicle_speed_fusion_multirate.afs"
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/vehicle_speed_fusion_multirate.afs"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/examples/mandatory_property_is_missing_syntax_error.afs"            
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/mandatory_property_is_missing_syntax_error.afs"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/examples/wheel_speed_plausibility_check.afs"
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/wheel_speed_plausibility_check.afs"            
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_logo.png"
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_logo.png"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_logo_large.png"
-                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_logo_large.png"
-        ${ACD_LINUX_ICON_COMMAND}
-        VERBATIM)
+# The meta model and the sample specification are picked up next to the executable.
+add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/examples/autoapiframework_metadata_V04.yaml"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_meta_model.yaml"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/examples/speed_hazard_detection.afs"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/speed_hazard_detection.afs"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/examples/vehicle_speed_fusion_multirate.afs"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/vehicle_speed_fusion_multirate.afs"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/examples/wheel_speed_plausibility_check.afs"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/wheel_speed_plausibility_check.afs"            
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_logo.png"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_logo.png"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_logo_large.png"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/autoapiframework_logo_large.png"
+    ${ACD_LINUX_ICON_COMMAND}
+    VERBATIM)
 
-    install(TARGETS AutoAPIFunctionDesigner RUNTIME DESTINATION bin)
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/autoapiframework_meta_model.yaml" DESTINATION bin)
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_logo.png" DESTINATION bin)
-    if(UNIX AND NOT APPLE)
-        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_icon-128x128.png"
-                DESTINATION bin
-                RENAME autoapiframework_icon.png)
-    endif()
+# Copy the Python tooling directory next to the executable so the GUI can call it.
+# DEPENDS lists the individual source files so CMake re-runs this command
+# automatically whenever any of them changes � no manual rebuild needed.
+add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
+    DEPENDS
+        "${AFD_TOOLS_SOURCE_DIR}/afs_model.py"
+        "${AFD_TOOLS_SOURCE_DIR}/validate_afs.py"
+        "${AFD_TOOLS_SOURCE_DIR}/generate_adapter.py"
+        "${AFD_TOOLS_SOURCE_DIR}/requirements.txt"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.hpp.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.cpp.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.h.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.c.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.rs.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/afs_model.py"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/afs_model.py"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/validate_afs.py"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/validate_afs.py"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/generate_adapter.py"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/generate_adapter.py"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/requirements.txt"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/requirements.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.hpp.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.hpp.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.cpp.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.cpp.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.h.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter_c.h.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.c.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter_c.c.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.rs.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.rs.jinja2"
+    COMMENT "Copying Python tools/ next to executable"
+    VERBATIM)
+
+install(TARGETS AutoAPIFunctionDesigner RUNTIME DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/autoapiframework_meta_model.yaml" DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_logo.png" DESTINATION bin)
+if(UNIX AND NOT APPLE)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/autoapiframework_icon-128x128.png"
+            DESTINATION bin
+            RENAME autoapiframework_icon.png)
+endif()
 
     # Commandline executable for the Auto API Function Designer syntax check tool
     add_executable(AutoAPIFunctionDesigner_SyntaxCheck
@@ -176,7 +240,6 @@ if(AFD_BUILD_APP)
     else()
         target_compile_options(AutoAPIFunctionDesigner_SyntaxCheck PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
-endif() #(AFD_BUILD_APP)
 
 if(BUILD_TESTING)
     add_executable(function_designer_tests

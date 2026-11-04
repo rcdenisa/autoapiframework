@@ -1,0 +1,114 @@
+// Generated from {{ source_file }} (metamodel {{ spec.metaModelRef.name }} {{ spec.metaModelRef.version }})
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "autoapiframework_enums.h"
+
+namespace autoapiframework {
+
+// ---------------------------------------------------------------------------
+// Function: {{ spec.name }} {{ spec.version }}
+// {{ spec.description | wordwrap(75) | replace('\n', '\n// ') }}
+// ---------------------------------------------------------------------------
+class {{ spec.name }}
+{
+public:
+{% if params %}
+    // Parameters (tunable: {% for p in params %}{{ p.tunable | lower }}{% if not loop.last %}, {% endif %}{% endfor %})
+{% for p in params %}
+    static constexpr {{ p.dataType | cpp_type }} k{{ p.name | cpp_identifier }} = {{ p.defaultValue | cpp_suffix(p.dataType) }};{% if p.unit or p.min is not none %}  // {{ p.unit }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %}{% endif %}
+
+{% endfor %}
+
+{% endif %}
+{% for s in spec.scheduling %}
+{% if s.runType.value == "cyclic" %}
+    // Scheduling
+    static constexpr std::uint32_t kStepCycleTimeMs = {{ s.cycleTimeMs | int }}U;
+{% if s.supervision and s.supervision.required and s.supervision.deadline %}
+    static constexpr std::uint32_t kStepMaxExecutionTimeMs = {{ s.supervision.deadline.maxExecutionTimeMs | int }}U;  // deadline supervision
+{% endif %}
+
+{% endif %}
+{% endfor %}
+{% if errors %}
+
+    // Error interfaces (candidate / provisional)
+{% for e in errors %}
+{% if e.severity %}
+    static constexpr ErrorSeverity k{{ e.name | cpp_identifier }}_Severity         = ErrorSeverity::{{ e.severity.value }};
+{% endif %}
+    static constexpr std::uint32_t k{{ e.name | cpp_identifier }}_MaturationTimeMs = {{ e.maturationTimeMs | int }}U;
+{% if e.resetTimeMs %}
+    static constexpr std::uint32_t k{{ e.name | cpp_identifier }}_ResetTimeMs      = {{ e.resetTimeMs | int }}U;
+{% endif %}
+{% endfor %}
+{% endif %}
+
+    {{ spec.name }}() = default;
+
+{% for s in spec.scheduling %}
+    FunctionResult {{ s.functionName | runnable_method }}();{% if s.runType.value == "init" %}       // runType: init,      ASIL {{ s.implementedASIL.value }}{% elif s.runType.value == "cyclic" %}       // runType: cyclic,    ASIL {{ s.implementedASIL.value }}, cycle {{ s.cycleTimeMs | int }} ms{% if s.previousRunnableRef %}, after {{ s.previousRunnableRef }}{% endif %}{% elif s.runType.value == "terminate" %}  // runType: terminate, ASIL {{ s.implementedASIL.value }}{% endif %}
+
+{% endfor %}
+{% if inputs %}
+    // Inputs
+{% for d in inputs %}
+    {{ d.dataType | cpp_type }} Get_{{ d.name | cpp_identifier }}() const;{% if d.unit or d.min is not none %}                                       // {{ d.unit }}{% if d.min is not none %} [{{ d.min }} .. {{ d.max }}]{% endif %}{% endif %}
+
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    DataQuality Get_{{ d.name | cpp_identifier }}_Qualifier() const;
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+
+    // Outputs
+{% for d in outputs %}
+    void Set_{{ d.name | cpp_identifier }}({{ d.dataType | cpp_type }} value);
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    void Set_{{ d.name | cpp_identifier }}_Qualifier(DataQuality value);
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+
+    // Error outputs
+{% for e in errors %}
+    void Set_{{ e.name | cpp_identifier }}({{ e.dataType | cpp_type }} value);
+{% endfor %}
+{% endif %}
+
+private:
+{% if inputs %}
+    // Input storage
+{% for d in inputs %}
+    {{ d.dataType | cpp_type }} m_{{ d.name | cpp_identifier }}{% if d.dataType | cpp_type | length < 8 %}       {% elif d.dataType | cpp_type | length < 12 %}   {% else %} {% endif %} = {{ d.dataType | cpp_default_value }};
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    DataQuality m_{{ d.name | cpp_identifier }}_Qualifier = DataQuality::uninitialized;
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+
+    // Output storage
+{% for d in outputs %}
+    {{ d.dataType | cpp_type }} m_{{ d.name | cpp_identifier }} = {{ d.dataType | cpp_default_value }};
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    DataQuality m_{{ d.name | cpp_identifier }}_Qualifier = DataQuality::uninitialized;
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+
+    // Error output storage
+{% for e in errors %}
+    {{ e.dataType | cpp_type }} m_{{ e.name | cpp_identifier }} = {{ e.dataType | cpp_default_value }};
+{% endfor %}
+{% endif %}
+};
+
+} // namespace autoapiframework

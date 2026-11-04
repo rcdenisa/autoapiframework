@@ -1,0 +1,90 @@
+/* Generated from {{ source_file }} (metamodel {{ spec.metaModelRef.name }} {{ spec.metaModelRef.version }}) */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#ifndef AUTOAPIFRAMEWORK_{{ spec.name | upper }}_H
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#include "autoapiframework_enums.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Function: {{ spec.name }} {{ spec.version }}
+ * {{ spec.description | wordwrap(74) | replace('\n', '\n * ') }}
+ * --------------------------------------------------------------------------- */
+
+{% if params %}
+/* Parameters (tunable: {% for p in params %}{{ p.tunable | lower }}{% if not loop.last %}, {% endif %}{% endfor %}) */
+{% for p in params %}
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_K{{ p.name | cpp_identifier | upper }} ({{ p.defaultValue | cpp_suffix(p.dataType) }})  /* {{ p.unit }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %} */
+{% endfor %}
+{% endif %}
+
+{% for s in spec.scheduling %}
+{% if s.runType.value == "cyclic" %}
+/* Scheduling */
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_STEP_CYCLE_TIME_MS ({{ s.cycleTimeMs | int }}U)
+{% if s.supervision and s.supervision.required and s.supervision.deadline %}
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_STEP_MAX_EXECUTION_TIME_MS ({{ s.supervision.deadline.maxExecutionTimeMs | int }}U)
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{% if errors %}
+/* Error interfaces (candidate / provisional) */
+{% for e in errors %}
+{% if e.severity %}
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_{{ e.name | cpp_identifier | upper }}_SEVERITY          (ErrorSeverity_{{ e.severity.value }})
+{% endif %}
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_{{ e.name | cpp_identifier | upper }}_MATURATION_TIME_MS ({{ e.maturationTimeMs | int }}U)
+{% if e.resetTimeMs %}
+#define AUTOAPIFRAMEWORK_{{ spec.name | upper }}_{{ e.name | cpp_identifier | upper }}_RESET_TIME_MS      ({{ e.resetTimeMs | int }}U)
+{% endif %}
+{% endfor %}
+{% endif %}
+
+/* Context structure (opaque handle) */
+typedef struct {{ spec.name }}_Context {{ spec.name }}_Context;
+
+/* Lifecycle */
+FunctionResult {{ spec.name }}_Init({{ spec.name }}_Context* ctx);       /* runType: init */
+FunctionResult {{ spec.name }}_Step({{ spec.name }}_Context* ctx);       /* runType: cyclic, {{ spec.scheduling | selectattr('runType.value', 'eq', 'cyclic') | map(attribute='cycleTimeMs') | first | int }} ms */
+FunctionResult {{ spec.name }}_Terminate({{ spec.name }}_Context* ctx);  /* runType: terminate */
+
+{% if inputs %}
+/* Inputs */
+{% for d in inputs %}
+{{ d.dataType | c_type }} {{ spec.name }}_Get_{{ d.name | cpp_identifier }}(const {{ spec.name }}_Context* ctx);
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+DataQuality {{ spec.name }}_Get_{{ d.name | cpp_identifier }}_Qualifier(const {{ spec.name }}_Context* ctx);
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if outputs %}
+/* Outputs */
+{% for d in outputs %}
+void {{ spec.name }}_Set_{{ d.name | cpp_identifier }}({{ spec.name }}_Context* ctx, {{ d.dataType | c_type }} value);
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+void {{ spec.name }}_Set_{{ d.name | cpp_identifier }}_Qualifier({{ spec.name }}_Context* ctx, DataQuality value);
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if errors %}
+/* Error outputs */
+{% for e in errors %}
+void {{ spec.name }}_Set_{{ e.name | cpp_identifier }}({{ spec.name }}_Context* ctx, {{ e.dataType | c_type }} value);
+{% endfor %}
+{% endif %}
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* AUTOAPIFRAMEWORK_{{ spec.name | upper }}_H */
