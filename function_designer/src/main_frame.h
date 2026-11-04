@@ -138,6 +138,23 @@ namespace afd
         wxString GetGitTag(const wxString& repoDir);
         std::string GetGitTagAndVersion(const std::string& prefix, const wxString& repoDir);
 
+        /// Returns the Python executable path defined at build time (AFD_PYTHON_EXECUTABLE).
+        static wxString GetPythonExecutable();
+        /// Returns true if the Python executable and tools/ directory are available at runtime.
+        static bool IsPythonToolingAvailable();
+        /// Returns a human-readable message explaining why Python tooling is unavailable.
+        static wxString GetPythonUnavailableMessage();
+        /// Runs a Python script from the tools/ directory synchronously.
+        /// @param script   Script filename, e.g. "validate_afs.py"
+        /// @param args     Additional arguments appended after the script path.
+        /// @param output   Captured stdout lines.
+        /// @param errors   Captured stderr lines.
+        /// @return Process exit code (0 = success).
+        static long RunPythonScript(const wxString& script,
+                                    const wxString& args,
+                                    wxArrayString&  output,
+                                    wxArrayString&  errors);
+
         wxDECLARE_EVENT_TABLE();
     };
 

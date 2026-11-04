@@ -1,0 +1,127 @@
+/* Generated from {{ source_file }} (metamodel {{ spec.metaModelRef.name }} {{ spec.metaModelRef.version }}) */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "{{ filename | replace('.c', '.h') }}"
+#include <stddef.h>
+
+/* ---------------------------------------------------------------------------
+ * Internal context structure
+ * --------------------------------------------------------------------------- */
+struct {{ spec.name }}_Context
+{
+{% if inputs %}
+    /* Input storage */
+{% for d in inputs %}
+    {{ d.dataType | c_type }} {{ d.name | cpp_identifier }};
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    DataQuality {{ d.name | cpp_identifier }}_Qualifier;
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+
+    /* Output storage */
+{% for d in outputs %}
+    {{ d.dataType | c_type }} {{ d.name | cpp_identifier }};
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    DataQuality {{ d.name | cpp_identifier }}_Qualifier;
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+
+    /* Error output storage */
+{% for e in errors %}
+    {{ e.dataType | c_type }} {{ e.name | cpp_identifier }};
+{% endfor %}
+{% endif %}
+};
+
+/* ---------------------------------------------------------------------------
+ * Scheduling
+ * --------------------------------------------------------------------------- */
+{% for s in spec.scheduling %}
+FunctionResult {{ spec.name }}_{{ s.functionName | runnable_method }}({{ spec.name }}_Context* ctx)
+{
+    if (ctx == NULL) { return FunctionResult_failure; }
+{% if s.runType.value == "init" %}
+{% for d in outputs %}
+    ctx->{{ d.name | cpp_identifier }} = {{ d.dataType | cpp_default_value }};
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    ctx->{{ d.name | cpp_identifier }}_Qualifier = DataQuality_uninitialized;
+{% endif %}
+{% endfor %}
+{% for e in errors %}
+    ctx->{{ e.name | cpp_identifier }} = {{ e.dataType | cpp_default_value }};
+{% endfor %}
+    return FunctionResult_success;
+{% elif s.runType.value == "cyclic" %}
+    /* TODO: implement {{ spec.description | truncate(60, True, '...') }} */
+    return FunctionResult_success;
+{% elif s.runType.value == "terminate" %}
+{% for d in outputs %}
+    ctx->{{ d.name | cpp_identifier }} = {{ d.dataType | cpp_default_value }};
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    ctx->{{ d.name | cpp_identifier }}_Qualifier = DataQuality_invalid;
+{% endif %}
+{% endfor %}
+{% for e in errors %}
+    ctx->{{ e.name | cpp_identifier }} = {{ e.dataType | cpp_default_value }};
+{% endfor %}
+    return FunctionResult_success;
+{% else %}
+    return FunctionResult_success;
+{% endif %}
+}
+
+{% endfor %}
+{% if inputs %}
+/* ---------------------------------------------------------------------------
+ * Inputs
+ * --------------------------------------------------------------------------- */
+{% for d in inputs %}
+{{ d.dataType | c_type }} {{ spec.name }}_Get_{{ d.name | cpp_identifier }}(const {{ spec.name }}_Context* ctx)
+{
+    return ctx->{{ d.name | cpp_identifier }};
+}
+
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+DataQuality {{ spec.name }}_Get_{{ d.name | cpp_identifier }}_Qualifier(const {{ spec.name }}_Context* ctx)
+{
+    return ctx->{{ d.name | cpp_identifier }}_Qualifier;
+}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+/* ---------------------------------------------------------------------------
+ * Outputs
+ * --------------------------------------------------------------------------- */
+{% for d in outputs %}
+void {{ spec.name }}_Set_{{ d.name | cpp_identifier }}({{ spec.name }}_Context* ctx, {{ d.dataType | c_type }} value)
+{
+    ctx->{{ d.name | cpp_identifier }} = value;
+}
+
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+void {{ spec.name }}_Set_{{ d.name | cpp_identifier }}_Qualifier({{ spec.name }}_Context* ctx, DataQuality value)
+{
+    ctx->{{ d.name | cpp_identifier }}_Qualifier = value;
+}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+/* ---------------------------------------------------------------------------
+ * Error outputs
+ * --------------------------------------------------------------------------- */
+{% for e in errors %}
+void {{ spec.name }}_Set_{{ e.name | cpp_identifier }}({{ spec.name }}_Context* ctx, {{ e.dataType | c_type }} value)
+{
+    ctx->{{ e.name | cpp_identifier }} = value;
+}
+
+{% endfor %}
+{% endif %}

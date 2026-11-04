@@ -1,0 +1,177 @@
+// Generated from {{ source_file }} (metamodel {{ spec.metaModelRef.name }} {{ spec.metaModelRef.version }})
+// SPDX-License-Identifier: Apache-2.0
+
+#![allow(dead_code, non_snake_case)]
+
+use crate::autoapiframework_enums::{DataQuality, ErrorSeverity, FunctionResult};
+
+// ---------------------------------------------------------------------------
+// Function: {{ spec.name }} {{ spec.version }}
+// {{ spec.description | wordwrap(75) | replace('\n', '\n// ') }}
+// ---------------------------------------------------------------------------
+
+{% if params %}
+// Parameters
+{% for p in params %}
+pub const K_{{ p.name | cpp_identifier | upper }}: {{ p.dataType | rust_type }} = {{ p.defaultValue | rust_literal(p.dataType) }}; // {{ p.unit }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %}
+
+{% endfor %}
+{% endif %}
+{% for s in spec.scheduling %}
+{% if s.runType.value == "cyclic" %}
+pub const STEP_CYCLE_TIME_MS: u32 = {{ s.cycleTimeMs | int }}_u32;
+{% if s.supervision and s.supervision.required and s.supervision.deadline %}
+pub const STEP_MAX_EXECUTION_TIME_MS: u32 = {{ s.supervision.deadline.maxExecutionTimeMs | int }}_u32;
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{% if errors %}
+// Error interfaces (candidate / provisional)
+{% for e in errors %}
+{% if e.severity %}
+pub const K_{{ e.name | cpp_identifier | upper }}_SEVERITY: ErrorSeverity = ErrorSeverity::{{ e.severity.value | capitalize }};
+{% endif %}
+pub const K_{{ e.name | cpp_identifier | upper }}_MATURATION_TIME_MS: u32 = {{ e.maturationTimeMs | int }}_u32;
+{% if e.resetTimeMs %}
+pub const K_{{ e.name | cpp_identifier | upper }}_RESET_TIME_MS: u32 = {{ e.resetTimeMs | int }}_u32;
+{% endif %}
+{% endfor %}
+{% endif %}
+
+pub struct {{ spec.name }} {
+{% if inputs %}
+    // Input storage
+{% for d in inputs %}
+    {{ d.name | rust_identifier }}: {{ d.dataType | rust_type }},
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    {{ d.name | rust_identifier }}_qualifier: DataQuality,
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+
+    // Output storage
+{% for d in outputs %}
+    {{ d.name | rust_identifier }}: {{ d.dataType | rust_type }},
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    {{ d.name | rust_identifier }}_qualifier: DataQuality,
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+
+    // Error output storage
+{% for e in errors %}
+    {{ e.name | rust_identifier }}: {{ e.dataType | rust_type }},
+{% endfor %}
+{% endif %}
+}
+
+impl Default for {{ spec.name }} {
+    fn default() -> Self {
+        Self {
+{% if inputs %}
+{% for d in inputs %}
+            {{ d.name | rust_identifier }}: {{ d.dataType | rust_type }}::default(),
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+            {{ d.name | rust_identifier }}_qualifier: DataQuality::Uninitialized,
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+{% for d in outputs %}
+            {{ d.name | rust_identifier }}: {{ d.dataType | rust_type }}::default(),
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+            {{ d.name | rust_identifier }}_qualifier: DataQuality::Uninitialized,
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+{% for e in errors %}
+            {{ e.name | rust_identifier }}: {{ e.dataType | rust_type }}::default(),
+{% endfor %}
+{% endif %}
+        }
+    }
+}
+
+impl {{ spec.name }} {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // Scheduling
+{% for s in spec.scheduling %}
+    pub fn {{ s.functionName | rust_method }}(&mut self) -> FunctionResult {
+{% if s.runType.value == "init" %}
+{% for d in outputs %}
+        self.{{ d.name | rust_identifier }} = {{ d.dataType | rust_type }}::default();
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+        self.{{ d.name | rust_identifier }}_qualifier = DataQuality::Uninitialized;
+{% endif %}
+{% endfor %}
+{% for e in errors %}
+        self.{{ e.name | rust_identifier }} = {{ e.dataType | rust_type }}::default();
+{% endfor %}
+        FunctionResult::Success
+{% elif s.runType.value == "cyclic" %}
+        // TODO: implement {{ spec.description | truncate(60, True, '...') }}
+        FunctionResult::Success
+{% elif s.runType.value == "terminate" %}
+{% for d in outputs %}
+        self.{{ d.name | rust_identifier }} = {{ d.dataType | rust_type }}::default();
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+        self.{{ d.name | rust_identifier }}_qualifier = DataQuality::Invalid;
+{% endif %}
+{% endfor %}
+{% for e in errors %}
+        self.{{ e.name | rust_identifier }} = {{ e.dataType | rust_type }}::default();
+{% endfor %}
+        FunctionResult::Success
+{% else %}
+        FunctionResult::Success
+{% endif %}
+    }
+
+{% endfor %}
+{% if inputs %}
+    // Inputs
+{% for d in inputs %}
+    pub fn get_{{ d.name | rust_identifier }}(&self) -> {{ d.dataType | rust_type }} {
+        self.{{ d.name | rust_identifier }}
+    }
+
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    pub fn get_{{ d.name | rust_identifier }}_qualifier(&self) -> DataQuality {
+        self.{{ d.name | rust_identifier }}_qualifier
+    }
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if outputs %}
+    // Outputs
+{% for d in outputs %}
+    pub fn set_{{ d.name | rust_identifier }}(&mut self, value: {{ d.dataType | rust_type }}) {
+        self.{{ d.name | rust_identifier }} = value;
+    }
+
+{% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
+    pub fn set_{{ d.name | rust_identifier }}_qualifier(&mut self, value: DataQuality) {
+        self.{{ d.name | rust_identifier }}_qualifier = value;
+    }
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if errors %}
+    // Error outputs
+{% for e in errors %}
+    pub fn set_{{ e.name | rust_identifier }}(&mut self, value: {{ e.dataType | rust_type }}) {
+        self.{{ e.name | rust_identifier }} = value;
+    }
+
+{% endfor %}
+{% endif %}
+}
