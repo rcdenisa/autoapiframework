@@ -17,12 +17,11 @@ class {{ spec.name }}
 {
 public:
 {% if params %}
-    // Parameters (tunable: {% for p in params %}{{ p.tunable | lower }}{% if not loop.last %}, {% endif %}{% endfor %})
+    // Parameters (tunable: {{ param_tunable_str }})
 {% for p in params %}
-    static constexpr {{ p.dataType | cpp_type }} k{{ p.name | cpp_identifier }} = {{ p.defaultValue | cpp_suffix(p.dataType) }};{% if p.unit or p.min is not none %}  // {{ p.unit }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %}{% endif %}
+    static constexpr {{ p.dataType | cpp_type | ljust(param_type_col) }} {{ ("k" ~ (p.name | cpp_identifier)) | ljust(param_name_col) }} = {{ p.defaultValue | cpp_suffix(p.dataType) }};{% if p.unit or p.min is not none %}   // {{ p.unit }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %}{% endif %}
 
 {% endfor %}
-
 {% endif %}
 {% for s in spec.scheduling %}
 {% if s.runType.value == "cyclic" %}
@@ -35,7 +34,6 @@ public:
 {% endif %}
 {% endfor %}
 {% if errors %}
-
     // Error interfaces (candidate / provisional)
 {% for e in errors %}
 {% if e.severity %}
@@ -46,12 +44,12 @@ public:
     static constexpr std::uint32_t k{{ e.name | cpp_identifier }}_ResetTimeMs      = {{ e.resetTimeMs | int }}U;
 {% endif %}
 {% endfor %}
-{% endif %}
 
+{% endif %}
     {{ spec.name }}() = default;
 
 {% for s in spec.scheduling %}
-    FunctionResult {{ s.functionName | runnable_method }}();{% if s.runType.value == "init" %}       // runType: init,      ASIL {{ s.implementedASIL.value }}{% elif s.runType.value == "cyclic" %}       // runType: cyclic,    ASIL {{ s.implementedASIL.value }}, cycle {{ s.cycleTimeMs | int }} ms{% if s.previousRunnableRef %}, after {{ s.previousRunnableRef }}{% endif %}{% elif s.runType.value == "terminate" %}  // runType: terminate, ASIL {{ s.implementedASIL.value }}{% endif %}
+    FunctionResult {{ s.functionName | runnable_method }}();{% if s.runType.value == "init" %}       // runType: init,      ASIL {{ s.implementedASIL.value }}{% elif s.runType.value == "cyclic" %}       // runType: cyclic,    ASIL {{ s.implementedASIL.value }}, cycle {{ s.cycleTimeMs | int }} ms{% elif s.runType.value == "terminate" %}  // runType: terminate, ASIL {{ s.implementedASIL.value }}{% endif %}
 
 {% endfor %}
 {% if inputs %}
@@ -86,9 +84,9 @@ private:
 {% if inputs %}
     // Input storage
 {% for d in inputs %}
-    {{ d.dataType | cpp_type }} m_{{ d.name | cpp_identifier }}{% if d.dataType | cpp_type | length < 8 %}       {% elif d.dataType | cpp_type | length < 12 %}   {% else %} {% endif %} = {{ d.dataType | cpp_default_value }};
+    {{ d.dataType | cpp_type | ljust(mem_type_col) }} {{ ("m_" ~ (d.name | cpp_identifier)) | ljust(mem_name_col) }} = {{ d.dataType | cpp_default_value }};
 {% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
-    DataQuality m_{{ d.name | cpp_identifier }}_Qualifier = DataQuality::uninitialized;
+    {{ "DataQuality" | ljust(mem_type_col) }} {{ ("m_" ~ (d.name | cpp_identifier) ~ "_Qualifier") | ljust(mem_name_col) }} = DataQuality::uninitialized;
 {% endif %}
 {% endfor %}
 {% endif %}
@@ -96,9 +94,9 @@ private:
 
     // Output storage
 {% for d in outputs %}
-    {{ d.dataType | cpp_type }} m_{{ d.name | cpp_identifier }} = {{ d.dataType | cpp_default_value }};
+    {{ d.dataType | cpp_type | ljust(mem_type_col) }} {{ ("m_" ~ (d.name | cpp_identifier)) | ljust(mem_name_col) }} = {{ d.dataType | cpp_default_value }};
 {% if d.runtimeCompanion and d.runtimeCompanion.qualityCode %}
-    DataQuality m_{{ d.name | cpp_identifier }}_Qualifier = DataQuality::uninitialized;
+    {{ "DataQuality" | ljust(mem_type_col) }} {{ ("m_" ~ (d.name | cpp_identifier) ~ "_Qualifier") | ljust(mem_name_col) }} = DataQuality::uninitialized;
 {% endif %}
 {% endfor %}
 {% endif %}
@@ -106,7 +104,7 @@ private:
 
     // Error output storage
 {% for e in errors %}
-    {{ e.dataType | cpp_type }} m_{{ e.name | cpp_identifier }} = {{ e.dataType | cpp_default_value }};
+    {{ e.dataType | cpp_type | ljust(mem_type_col) }} {{ ("m_" ~ (e.name | cpp_identifier)) | ljust(mem_name_col) }} = {{ e.dataType | cpp_default_value }};
 {% endfor %}
 {% endif %}
 };

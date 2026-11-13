@@ -1271,7 +1271,7 @@ namespace afd
         // --- Python meta model validation (validate_afs.py) ---
         if (!IsPythonToolingAvailable())
         {
-            // Python not available — show only the C++ result
+            // Python not available ï¿½ show only the C++ result
             if (cppOk)
             {
                 wxMessageBox("No syntax errors found.",
@@ -1290,7 +1290,7 @@ namespace afd
         const wxString afsPath = ToWx(m_specification.GetSourcePath());
         if (afsPath.IsEmpty())
         {
-            // File not saved yet — show only the C++ result
+            // File not saved yet ï¿½ show only the C++ result
             if (cppOk)
             {
                 wxMessageBox("No syntax errors found.\n\n"
@@ -1483,7 +1483,7 @@ namespace afd
         else if (selectedLanguage == "Rust") languageArg = "rust";
         else                                 languageArg = "cpp";
 
-        // --- Output directory selection ---
+        // --- Output directory for adapter files ---
         wxDirDialog dirDialog(this,
                               "Select output directory for generated adapter",
                               wxFileName(afsPath).GetPath(),
@@ -1492,14 +1492,25 @@ namespace afd
         {
             return;
         }
-
         const wxString outputDir = dirDialog.GetPath();
+
+        // --- Output directory for shared enums file ---
+        wxDirDialog enumsDialog(this,
+                                "Select directory for shared autoapiframework_enums file\n"
+                                "(shared across all generated adapters - use a fixed framework include directory)",
+                                outputDir,
+                                wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+        if (enumsDialog.ShowModal() != wxID_OK)
+        {
+            return;
+        }
+        const wxString enumsDir = enumsDialog.GetPath();
 
         wxArrayString output, errors;
         const long rc = RunPythonScript(
             "generate_adapter.py",
-            wxString::Format("\"%s\" --language %s --output-dir \"%s\"",
-                             afsPath, languageArg, outputDir),
+            wxString::Format("\"%s\" --language %s --output-dir \"%s\" --enums-dir \"%s\"",
+                             afsPath, languageArg, outputDir, enumsDir),
             output, errors);
 
         wxString result;

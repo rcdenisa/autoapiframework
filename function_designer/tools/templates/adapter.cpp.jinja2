@@ -23,7 +23,7 @@ FunctionResult {{ spec.name }}::{{ s.functionName | runnable_method }}()
 {% endfor %}
     return FunctionResult::success;
 {% elif s.runType.value == "cyclic" %}
-    // TODO: implement {{ spec.description | truncate(60, True, '...') }}
+    // TODO: implement {{ spec.name }} logic
     return FunctionResult::success;
 {% elif s.runType.value == "terminate" %}
 {% for d in outputs %}

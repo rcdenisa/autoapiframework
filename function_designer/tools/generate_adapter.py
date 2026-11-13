@@ -280,17 +280,110 @@ def _build_jinja_env() -> Environment:
     env.filters["rust_identifier"]   = _rust_identifier
     env.filters["rust_literal"]      = _rust_literal
     env.filters["rust_method"]       = _rust_method
+    # Generic utility filters
+    env.filters["ljust"]             = lambda s, width: str(s).ljust(width)
     return env
+
+
+def _check_and_generate_enums(
+    output_dir: Path,
+    meta_model_name: str,
+    meta_model_version: str,
+    language: str,
+    env: "Environment",
+) -> tuple:
+    """
+    Ensures the shared autoapiframework_enums file exists and is up to date.
+
+    Logic:
+      - If the file does not exist → generate it.
+      - If the file exists but was generated for a different meta model version → regenerate.
+      - If the file exists and the version matches → skip (no overwrite).
+
+    Returns (path, action) where action is one of:
+      'created'    — file did not exist, was generated
+      'updated'    — file existed but was outdated, was regenerated
+      'up-to-date' — file exists and matches current meta model version
+    """
+    if language in ("cpp",):
+        filename      = "autoapiframework_enums.h"
+        template_name = "autoapiframework_enums.hpp.jinja2"
+    elif language == "c":
+        filename      = "autoapiframework_enums.h"
+        template_name = "autoapiframework_enums_c.h.jinja2"
+    elif language == "rust":
+        filename      = "autoapiframework_enums.rs"
+        template_name = "autoapiframework_enums.rs.jinja2"
+    else:
+        return None, "skipped"
+
+    enums_path     = output_dir / filename
+    version_marker = f"{meta_model_name} {meta_model_version}"
+
+    # Check if file exists and is already up to date
+    if enums_path.exists():
+        first_line = enums_path.read_text(encoding="utf-8").split("\n")[0]
+        if version_marker in first_line:
+            return enums_path, "up-to-date"
+        action = "updated"
+    else:
+        action = "created"
+
+    # Generate enums file from template
+    context = {
+        "meta_model_name":    meta_model_name,
+        "meta_model_version": meta_model_version,
+    }
+    template = env.get_template(template_name)
+    rendered = template.render(**context)
+    enums_path.write_text(rendered, encoding="utf-8")
+
+    return enums_path, action
+
+
+def _compute_cpp_alignments(inputs, outputs, errors, params):
+    """
+    Compute column widths for aligned C++ declarations matching Thomas P. style.
+    Returns (mem_type_col, mem_name_col, param_type_col, param_name_col).
+    """
+    # Private member alignment — collect all (type, full_m_name) pairs
+    all_members = []
+    for d in inputs:
+        all_members.append((_cpp_type(d.dataType), f"m_{_cpp_identifier(d.name)}"))
+        if d.runtimeCompanion and d.runtimeCompanion.qualityCode:
+            all_members.append(("DataQuality", f"m_{_cpp_identifier(d.name)}_Qualifier"))
+    for d in outputs:
+        all_members.append((_cpp_type(d.dataType), f"m_{_cpp_identifier(d.name)}"))
+        if d.runtimeCompanion and d.runtimeCompanion.qualityCode:
+            all_members.append(("DataQuality", f"m_{_cpp_identifier(d.name)}_Qualifier"))
+    for e in errors:
+        all_members.append((_cpp_type(e.dataType), f"m_{_cpp_identifier(e.name)}"))
+
+    mem_type_col = max((len(t) for t, _ in all_members), default=5) + 1
+    mem_name_col = max((len(n) for _, n in all_members), default=8) + 4
+
+    # Parameter alignment — collect all (type, full_k_name) pairs
+    all_param_entries = []
+    for p in params:
+        all_param_entries.append((_cpp_type(p.dataType), f"k{_cpp_identifier(p.name)}"))
+
+    param_type_col = max((len(t) for t, _ in all_param_entries), default=5) + 1
+    param_name_col = max((len(n) for _, n in all_param_entries), default=8) + 3
+
+    return mem_type_col, mem_name_col, param_type_col, param_name_col
 
 
 # ---------------------------------------------------------------------------
 # Main generation logic
 # ---------------------------------------------------------------------------
 
-def generate(afs_path: Path, output_dir: Path, language: str = "cpp") -> list:
+def generate(afs_path: Path, output_dir: Path, language: str = "cpp",
+             enums_dir: Path = None) -> list:
     """
     Validates and generates adapter file(s) from an .afs file.
-    language: "cpp" generates .h + .cpp, "c" generates .h + .c, "rust" generates .rs
+    language:  "cpp" generates .h + .cpp, "c" generates .h + .c, "rust" generates .rs
+    enums_dir: directory for the shared enums file. Defaults to output_dir if not specified.
+               Should point to a fixed framework include directory shared across all adapters.
     Returns a list of generated file paths.
     Raises SystemExit on any error.
     """
@@ -342,18 +435,52 @@ def generate(afs_path: Path, output_dir: Path, language: str = "cpp") -> list:
 
     env = _build_jinja_env()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # enums_dir defaults to output_dir if not specified
+    resolved_enums_dir = enums_dir if enums_dir else output_dir
+    resolved_enums_dir.mkdir(parents=True, exist_ok=True)
+
     generated = []
+
+    # --- Step 1: Ensure shared enums file is present and up to date ---
+    enums_path, enums_action = _check_and_generate_enums(
+        resolved_enums_dir,
+        spec.metaModelRef.name,
+        spec.metaModelRef.version,
+        language,
+        env,
+    )
+    if enums_path:
+        if enums_action == "created":
+            print(f"Created enums : {enums_path}")
+        elif enums_action == "updated":
+            print(f"Updated enums : {enums_path}  (meta model version changed)")
+        else:
+            print(f"Enums OK      : {enums_path}  (up to date)")
+
+    # Compute C++ alignment widths (only relevant for cpp template)
+    mem_type_col, mem_name_col, param_type_col, param_name_col = \
+        _compute_cpp_alignments(inputs, outputs, errors, params)
+
+    # Unique tunable values for parameter comment
+    param_tunable_str = ", ".join(sorted(set(str(p.tunable).lower() for p in params))) if params else ""
 
     for template_name, output_filename in templates_and_files:
         context = {
-            "spec":        spec,
-            "inputs":      inputs,
-            "outputs":     outputs,
-            "params":      params,
-            "errors":      errors,
-            "filename":    output_filename,
-            "source_file": afs_path.name,
-            "language":    language,
+            "spec":             spec,
+            "inputs":           inputs,
+            "outputs":          outputs,
+            "params":           params,
+            "errors":           errors,
+            "filename":         output_filename,
+            "source_file":      afs_path.name,
+            "language":         language,
+            # C++ alignment widths
+            "mem_type_col":     mem_type_col,
+            "mem_name_col":     mem_name_col,
+            "param_type_col":   param_type_col,
+            "param_name_col":   param_name_col,
+            "param_tunable_str": param_tunable_str,
         }
         try:
             template = env.get_template(template_name)
@@ -394,6 +521,16 @@ def main() -> int:
         default=None,
         help="Directory for the generated files. Defaults to the directory of the .afs file.",
     )
+    parser.add_argument(
+        "--enums-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory for the shared autoapiframework_enums file. "
+            "Should be a fixed framework include directory shared across all generated adapters. "
+            "Defaults to --output-dir if not specified."
+        ),
+    )
     args = parser.parse_args()
 
     afs_path: Path = args.afs_file.resolve()
@@ -402,9 +539,10 @@ def main() -> int:
         return 1
 
     output_dir: Path = args.output_dir.resolve() if args.output_dir else afs_path.parent
+    enums_dir:  Path = args.enums_dir.resolve()  if args.enums_dir  else None
 
     print(f"Generating {args.language.upper()} adapter for: {afs_path.name}")
-    generated = generate(afs_path, output_dir, language=args.language)
+    generated = generate(afs_path, output_dir, language=args.language, enums_dir=enums_dir)
     for path in generated:
         print(f"Generated: {path}")
     return 0

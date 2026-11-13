@@ -182,6 +182,9 @@ add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
         "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.h.jinja2"
         "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.c.jinja2"
         "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.rs.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.hpp.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums_c.h.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.rs.jinja2"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${AFD_TOOLS_SOURCE_DIR}/afs_model.py"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/afs_model.py"
@@ -211,6 +214,15 @@ add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.rs.jinja2"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.rs.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.hpp.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/autoapiframework_enums.hpp.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums_c.h.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/autoapiframework_enums_c.h.jinja2"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.rs.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/autoapiframework_enums.rs.jinja2"
     COMMENT "Copying Python tools/ next to executable"
     VERBATIM)
 
