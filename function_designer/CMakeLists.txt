@@ -90,8 +90,18 @@ elseif(ACD_FETCH_WXWIDGETS)
     FetchContent_Declare(wxWidgets
         GIT_REPOSITORY https://github.com/wxWidgets/wxWidgets.git
         GIT_TAG v3.2.6
-        GIT_SHALLOW TRUE)
+            GIT_SHALLOW TRUE
+            SYSTEM)
+    # wxWidgets itself must never be built with warnings as errors.
+    set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
     FetchContent_MakeAvailable(wxWidgets)
+    if(CMAKE_VERSION VERSION_LESS 3.24)
+        foreach(wx_target wxbase wxcore wxadv)
+            if(TARGET ${wx_target})
+                target_compile_options(${wx_target} PRIVATE /WX-)
+            endif()
+        endforeach()
+    endif()
     set(ACD_WX_LIBRARIES wx::core wx::base)
 else()
     message(FATAL_ERROR
@@ -127,16 +137,26 @@ target_compile_definitions(AutoAPIFunctionDesigner PRIVATE
     AFD_PYTHON_EXECUTABLE="${AFD_PYTHON_EXECUTABLE}"
     AFD_TOOLS_DIR="$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools")
 
-if(MSVC)
-    target_compile_options(AutoAPIFunctionDesigner PRIVATE /W4 /WX /utf-8)
-    target_compile_definitions(AutoAPIFunctionDesigner PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT AutoAPIFunctionDesigner)
-else()
-    target_compile_options(AutoAPIFunctionDesigner PRIVATE -Wall -Wextra -Wpedantic -Werror)
-endif()
+    if(MSVC)
+        # /external:W0 silences warnings from wx headers (SYSTEM include dirs) while /WX stays active for our code.
+        target_compile_options(AutoAPIFunctionDesigner PRIVATE /W4 /WX /utf-8 /external:W0)
+        target_compile_definitions(AutoAPIFunctionDesigner PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+        # CMake < 3.25 ignores SYSTEM for FetchContent, so mark the wx include dirs external manually.
+        if(TARGET wxbase)
+            get_target_property(ACD_WX_INCLUDES wxbase INTERFACE_INCLUDE_DIRECTORIES)
+            foreach(ACD_WX_INC IN LISTS ACD_WX_INCLUDES)
+                if(NOT ACD_WX_INC MATCHES "^\\$<")
+                    target_compile_options(AutoAPIFunctionDesigner PRIVATE "/external:I${ACD_WX_INC}")
+                endif()
+            endforeach()
+        endif()
+        set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT AutoAPIFunctionDesigner)
+    else()
+        target_compile_options(AutoAPIFunctionDesigner PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
 
 set_target_properties(AutoAPIFunctionDesigner PROPERTIES
-    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:function_designer>")
+    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>")
 
 if(UNIX AND NOT APPLE)
     set(ACD_LINUX_ICON_COMMAND
@@ -157,6 +177,9 @@ add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
             "${CMAKE_CURRENT_SOURCE_DIR}/examples/vehicle_speed_fusion_multirate.afs"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/vehicle_speed_fusion_multirate.afs"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/examples/mandatory_property_is_missing_syntax_error.afs"            
+                "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/mandatory_property_is_missing_syntax_error.afs"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/examples/wheel_speed_plausibility_check.afs"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/wheel_speed_plausibility_check.afs"            
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -237,7 +260,7 @@ endif()
 
     # Commandline executable for the Auto API Function Designer syntax check tool
     add_executable(AutoAPIFunctionDesigner_SyntaxCheck
-        src/main_syntax_check.cpp
+        src/syntax_check/main.cpp
         src/yaml_node.cpp
         src/yaml_parser.cpp
         src/meta_model.cpp
@@ -253,20 +276,124 @@ endif()
         target_compile_options(AutoAPIFunctionDesigner_SyntaxCheck PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 
+# Standalone AFS parser CLI; it does not depend on the wxWidgets application.
+add_executable(AfsFileParser
+    src/afs_file_parser/main.cpp
+    src/afs_file_parser/afs_file_expectation.cpp
+    src/afs_file_parser/afs_file_parser.cpp
+    src/yaml_node.cpp
+    src/yaml_parser.cpp
+)
+target_include_directories(AfsFileParser PRIVATE src/afs_file_parser)
+if(MSVC)
+    target_compile_options(AfsFileParser PRIVATE /W4 /WX /utf-8)
+else()
+    target_compile_options(AfsFileParser PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+install(TARGETS AfsFileParser RUNTIME DESTINATION bin)
+
 if(BUILD_TESTING)
+    add_executable(afs_file_parser_tests
+        tests/afs_file_parser_tests.cpp
+        src/afs_file_parser/afs_file_parser.cpp
+        src/yaml_node.cpp
+        src/yaml_parser.cpp
+    )
+    target_include_directories(afs_file_parser_tests PRIVATE src/afs_file_parser)
+    target_compile_definitions(afs_file_parser_tests PRIVATE
+        AFS_PARSER_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
+    if(MSVC)
+        target_compile_options(afs_file_parser_tests PRIVATE /W4 /WX /utf-8)
+    else()
+        target_compile_options(afs_file_parser_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME afs_file_parser_tests COMMAND afs_file_parser_tests)
+
     add_executable(function_designer_tests
-        tests/yaml_tests.cpp
+        tests/function_designer_tests.cpp
+        src/function_specification.cpp
         src/yaml_node.cpp
         src/yaml_parser.cpp
         src/yaml_writer.cpp
     )
     target_include_directories(function_designer_tests PRIVATE src)
     target_compile_definitions(function_designer_tests PRIVATE
-        AFD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
+        AFD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
+        AFD_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
     if(MSVC)
         target_compile_options(function_designer_tests PRIVATE /W4 /WX /utf-8)
     else()
         target_compile_options(function_designer_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME function_designer_tests COMMAND function_designer_tests)
+
+    add_executable(yaml_comment_tests
+        tests/yaml_comment_tests.cpp
+        src/yaml_node.cpp
+        src/yaml_parser.cpp
+        src/yaml_writer.cpp
+    )
+    target_include_directories(yaml_comment_tests PRIVATE src)
+    if(MSVC)
+        target_compile_options(yaml_comment_tests PRIVATE /W4 /WX /utf-8)
+    else()
+        target_compile_options(yaml_comment_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME yaml_comment_tests COMMAND yaml_comment_tests)
+
+    # Unit tests for ValidateFunction / MetaModel — no wxWidgets dependency.
+    add_executable(syntax_check_tests
+        tests/syntax_check_tests.cpp
+        src/yaml_node.cpp
+        src/yaml_parser.cpp
+        src/meta_model.cpp
+        src/validate_function.cpp
+    )
+    target_include_directories(syntax_check_tests PRIVATE src)
+    target_compile_definitions(syntax_check_tests PRIVATE
+        AFD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
+    if(MSVC)
+        target_compile_options(syntax_check_tests PRIVATE /W4 /WX /utf-8)
+    else()
+        target_compile_options(syntax_check_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME syntax_check_tests COMMAND syntax_check_tests)
+
+    # Integration tests that invoke the CLI executable as a subprocess.
+    # Each test uses PASS_REGULAR_EXPRESSION so the expected output is verified
+    # regardless of whether the exit code is zero or non-zero.
+    if(AFD_BUILD_APP)
+        set(SC_EXE "$<TARGET_FILE:AutoAPIFunctionDesigner_SyntaxCheck>")
+        set(EX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+
+        add_test(NAME syntax_check_cli_speed_hazard
+                 COMMAND "${SC_EXE}" "${EX_DIR}/speed_hazard_detection.afs")
+        set_tests_properties(syntax_check_cli_speed_hazard PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Syntax OK")
+
+        add_test(NAME syntax_check_cli_vehicle_speed_fusion
+                 COMMAND "${SC_EXE}" "${EX_DIR}/vehicle_speed_fusion_multirate.afs")
+        set_tests_properties(syntax_check_cli_vehicle_speed_fusion PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Syntax OK")
+
+        add_test(NAME syntax_check_cli_wheel_speed
+                 COMMAND "${SC_EXE}" "${EX_DIR}/wheel_speed_plausibility_check.afs")
+        set_tests_properties(syntax_check_cli_wheel_speed PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Syntax OK")
+
+        add_test(NAME syntax_check_cli_mandatory_missing
+                 COMMAND "${SC_EXE}"
+                         "${EX_DIR}/mandatory_property_is_missing_syntax_error.afs")
+        set_tests_properties(syntax_check_cli_mandatory_missing PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Syntax error")
+
+        add_test(NAME syntax_check_cli_missing_file
+                 COMMAND "${SC_EXE}" "nonexistent_file.afs")
+        set_tests_properties(syntax_check_cli_missing_file PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Could not read")
+
+        add_test(NAME syntax_check_cli_no_args COMMAND "${SC_EXE}")
+        set_tests_properties(syntax_check_cli_no_args PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Usage:")
+    endif() #(AFD_BUILD_APP)
 endif() #(BUILD_TESTING)
