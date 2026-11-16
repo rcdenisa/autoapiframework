@@ -12,6 +12,7 @@
  *
  * Contributors:
  *   Thomas Pfleiderer - initial function designer
+ *   Thomas Pfleiderer - support 4.1, Support YAML comments, Drag & Drop, Enums in afs files added
  ********************************************************************************/
  
 #include "main_frame.h"
@@ -31,6 +32,8 @@
 #include <wx/listctrl.h>
 #include <wx/notebook.h>
 #include <wx/stdpaths.h>
+#include <wx/listbox.h>
+#include <wx/textdlg.h>
 
 #include <algorithm>
 #include <functional>
@@ -45,6 +48,7 @@ namespace afd
         constexpr const char* kMetaModelFileConfigKey = "/Paths/MetaModelFile";
         constexpr const char* kMetaModelDirectoryConfigKey = "/Paths/MetaModelDirectory";
         constexpr const char* kVspecDirectoryConfigKey = "/Paths/VSpecDirectory";
+        constexpr const char* kRecentFilesConfigKey = "/Paths/RecentFiles";
         constexpr const char* kCreateApiLanguageConfigKey = "/CreateAPI/Language";
         constexpr const char* kDisableSyntaxCheckBeforeSavingConfigKey = "/Settings/DisableSyntaxCheckBeforeSaving";
         constexpr const char* kLogoFileName = "autoapiframework_logo.png";
@@ -54,6 +58,7 @@ namespace afd
         constexpr int kFirstColumnWidth = 25;
         constexpr int kMinColumnWidth = 90;
         constexpr int kMaxColumnWidth = 320;
+        constexpr int kMaxRecentFiles = 10;
 
         wxString ToWx(const std::string& text) { return wxString::FromUTF8(text.c_str()); }
 
@@ -176,12 +181,16 @@ namespace afd
     wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
         EVT_BUTTON(MainFrame::ID_NewSpecification, MainFrame::OnNewSpecification)
         EVT_BUTTON(MainFrame::ID_OpenSpecification, MainFrame::OnOpenSpecification)
+        EVT_DROP_FILES(MainFrame::OnDropFiles)
+        EVT_MENU_RANGE(MainFrame::ID_RecentFiles, MainFrame::ID_RecentFilesLast,
+                       MainFrame::OnRecentFileSelected)
         EVT_BUTTON(MainFrame::ID_SaveSpecification, MainFrame::OnSaveSpecification)
         EVT_BUTTON(MainFrame::ID_SaveSpecificationAs, MainFrame::OnSaveSpecificationAs)
         EVT_BUTTON(MainFrame::ID_OpenMetaModel, MainFrame::OnOpenMetaModel)
         EVT_BUTTON(MainFrame::ID_ShowMetaModel, MainFrame::OnShowMetaModel)
         EVT_BUTTON(MainFrame::ID_Settings, MainFrame::OnSettings)
         EVT_BUTTON(MainFrame::ID_AddVWithVspecFile, MainFrame::OnAddWithVspecFile)
+        EVT_BUTTON(MainFrame::ID_EditEnums, MainFrame::OnEditEnums)
         EVT_BUTTON(MainFrame::ID_Add, MainFrame::OnAdd)
         EVT_BUTTON(MainFrame::ID_Delete, MainFrame::OnDelete)
         EVT_BUTTON(MainFrame::ID_Edit, MainFrame::OnEdit)
@@ -199,6 +208,7 @@ namespace afd
         EVT_MENU(MainFrame::ID_QuickTips, MainFrame::OnQuickTips)
         EVT_MENU(wxID_HELP, MainFrame::OnHelp)
         EVT_MENU(wxID_EXIT, MainFrame::OnExit)
+        EVT_CLOSE(MainFrame::OnClose)
     wxEND_EVENT_TABLE()
 
     MainFrame::MainFrame()
@@ -214,7 +224,9 @@ namespace afd
             SetIcon(appIcon);
         }
 #endif
+        DragAcceptFiles(true);
         BuildUi();
+        RefreshRecentFiles();
         AutoLoadMetaModel();
         UpdateMetaModelButtonStates();
         UpdateTitleAndStatus();
@@ -225,6 +237,9 @@ namespace afd
         wxMenu* fileMenu = new wxMenu();
         fileMenu->Append(ID_NewSpecification, "&New function specification\tCtrl-N");
         fileMenu->Append(ID_OpenSpecification, "&Read function specification...\tCtrl-O");
+        m_recentFilesMenu = new wxMenu();
+        fileMenu->AppendSubMenu(m_recentFilesMenu, "Recent files");
+        fileMenu->AppendSeparator();
         fileMenu->Append(ID_SaveSpecification, "&Save function specification\tCtrl-S");
         fileMenu->Enable(ID_SaveSpecification, false);        
         fileMenu->Append(ID_SaveSpecificationAs, "&Write function specification as...\tCtrl-W");
@@ -290,6 +305,8 @@ namespace afd
         mainSizer->Add(buttonSizer, 0, wxEXPAND);
 
         wxBoxSizer* editButtonSizer = new wxBoxSizer(wxHORIZONTAL);
+        m_editEnumsButton = new wxButton(panel, ID_EditEnums, "Edit enums");
+        m_editEnumsButton->Enable(false);
         m_addWithVspecFileButton = new wxButton(panel, ID_AddVWithVspecFile, "Add by vspec file");
         m_addWithVspecFileButton->Enable(false);
         m_addButton = new wxButton(panel, ID_Add, "Add");
@@ -304,6 +321,7 @@ namespace afd
         m_showButton->Enable(false);
         m_createAPIButton = new wxButton(panel, ID_CreateAPI, "Create API");
         m_createAPIButton->Enable(false);
+        editButtonSizer->Add(m_editEnumsButton, 0, wxALL, 5);
         editButtonSizer->Add(m_addWithVspecFileButton, 0, wxALL, 5);
         editButtonSizer->Add(m_addButton, 0, wxALL, 5);
         editButtonSizer->Add(m_deleteButton, 0, wxALL, 5);
@@ -323,15 +341,33 @@ namespace afd
                                         wxSize(-1, 140), wxTE_MULTILINE | wxTE_BESTWRAP);
         m_nameText->Bind(wxEVT_TEXT, [this](wxCommandEvent&)
         {
+            if (!m_specification.IsLoaded())
+            {
+                return;
+            }
             m_specification.SetName(ToStd(m_nameText->GetValue()));
+            m_contentChanged = true;
+            UpdateSaveButtonState();
         });
         m_versionText->Bind(wxEVT_TEXT, [this](wxCommandEvent&)
         {
+            if (!m_specification.IsLoaded())
+            {
+                return;
+            }
             m_specification.SetVersion(ToStd(m_versionText->GetValue()));
+            m_contentChanged = true;
+            UpdateSaveButtonState();
         });
         m_descriptionText->Bind(wxEVT_TEXT, [this](wxCommandEvent&)
         {
+            if (!m_specification.IsLoaded())
+            {
+                return;
+            }
             m_specification.SetDescription(ToStd(m_descriptionText->GetValue()));
+            m_contentChanged = true;
+            UpdateSaveButtonState();
         });
         wxBoxSizer* attributeSizer = new wxBoxSizer(wxVERTICAL);
         wxFlexGridSizer* editableAttributes = new wxFlexGridSizer(2, 5, 5);
@@ -503,6 +539,34 @@ namespace afd
         LoadSpecification(dialog.GetPath());
     }
 
+    void MainFrame::OnDropFiles(wxDropFilesEvent& event)
+    {
+        if (event.GetNumberOfFiles() > 1)
+        {
+            wxMessageBox("Drop one function specification at a time.", kApplicationName,
+                         wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+        if (event.GetNumberOfFiles() == 1)
+        {
+            LoadSpecification(event.GetFiles()[0]);
+        }
+    }
+
+    void MainFrame::OnRecentFileSelected(wxCommandEvent& event)
+    {
+        const long index = event.GetId() - ID_RecentFiles;
+        wxString path;
+        if (index >= 0 &&
+            wxConfigBase::Get()->Read(wxString(kRecentFilesConfigKey) + "/" +
+                                      wxString::Format("%ld", index), &path) &&
+            !path.empty())
+        {
+            LoadSpecification(path);
+        }
+        RefreshRecentFiles();
+    }
+
     void MainFrame::OnSaveSpecification(wxCommandEvent& e)
     {
         if (!m_specification.IsLoaded())
@@ -528,6 +592,9 @@ namespace afd
                         wxOK | wxICON_ERROR, this);
             return;
         }
+        m_contentChanged = false;
+        UpdateSaveButtonState();
+        AddRecentFile(path);
         SetStatusText("Written: " + path, 0);
     }
 
@@ -579,6 +646,9 @@ namespace afd
                         wxOK | wxICON_ERROR, this);
             return;
         }
+        m_contentChanged = false;
+        UpdateSaveButtonState();
+        AddRecentFile(dialog.GetPath());
         SetStatusText("Written: " + dialog.GetPath(), 0);
     }
 
@@ -757,6 +827,147 @@ namespace afd
         dialog.ShowModal();
     }
 
+    void MainFrame::OnEditEnums(wxCommandEvent&)
+    {
+        auto enums = m_specification.GetEnums();
+
+        wxDialog dialog(this, wxID_ANY, "Edit enums", wxDefaultPosition, wxDefaultSize,
+                        wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+        wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
+        wxBoxSizer* content = new wxBoxSizer(wxHORIZONTAL);
+
+        wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
+        wxListBox* nameList = new wxListBox(&dialog, wxID_ANY, wxDefaultPosition, wxSize(220, 280));
+        wxBoxSizer* nameButtons = new wxBoxSizer(wxHORIZONTAL);
+        wxButton* addEnumButton = new wxButton(&dialog, wxID_ANY, "Add enum");
+        wxButton* deleteEnumButton = new wxButton(&dialog, wxID_ANY, "Delete enum");
+        nameButtons->Add(addEnumButton, 0, wxRIGHT, 6);
+        nameButtons->Add(deleteEnumButton, 0);
+        leftSizer->Add(nameList, 1, wxEXPAND | wxBOTTOM, 6);
+        leftSizer->Add(nameButtons, 0);
+
+        wxBoxSizer* rightSizer = new wxBoxSizer(wxVERTICAL);
+        rightSizer->Add(new wxStaticText(&dialog, wxID_ANY, "Values (one per line)"), 0, wxBOTTOM, 4);
+        wxTextCtrl* valuesText = new wxTextCtrl(&dialog, wxID_ANY, "", wxDefaultPosition,
+                                                wxSize(280, 280), wxTE_MULTILINE);
+        rightSizer->Add(valuesText, 1, wxEXPAND);
+
+        content->Add(leftSizer, 0, wxEXPAND | wxRIGHT, 12);
+        content->Add(rightSizer, 1, wxEXPAND);
+        sizer->Add(content, 1, wxEXPAND | wxALL, 12);
+        sizer->Add(dialog.CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 8);
+
+        int current = wxNOT_FOUND;
+        auto splitLines = [](const wxString& text)
+        {
+            std::vector<std::string> values;
+            for (const wxString& line : wxSplit(text, '\n'))
+            {
+                const std::string value = ToStd(line.Strip(wxString::both));
+                if (!value.empty())
+                {
+                    values.push_back(value);
+                }
+            }
+            return values;
+        };
+        auto storeCurrent = [&]()
+        {
+            if (current >= 0 && current < static_cast<int>(enums.size()))
+            {
+                enums[current].second = splitLines(valuesText->GetValue());
+            }
+        };
+        auto showSelection = [&](int index)
+        {
+            current = index;
+            wxString text;
+            if (index >= 0)
+            {
+                for (const std::string& value : enums[index].second)
+                {
+                    text += ToWx(value) + "\n";
+                }
+            }
+            valuesText->SetValue(text);
+            valuesText->Enable(index >= 0);
+            deleteEnumButton->Enable(index >= 0);
+        };
+
+        for (const auto& entry : enums)
+        {
+            nameList->Append(ToWx(entry.first));
+        }
+        if (!enums.empty())
+        {
+            nameList->SetSelection(0);
+        }
+        showSelection(enums.empty() ? wxNOT_FOUND : 0);
+
+        nameList->Bind(wxEVT_LISTBOX, [&](wxCommandEvent&)
+        {
+            storeCurrent();
+            showSelection(nameList->GetSelection());
+        });
+        addEnumButton->Bind(wxEVT_BUTTON, [&](wxCommandEvent&)
+        {
+            wxTextEntryDialog nameDialog(&dialog, "Name of the new enum:", "Add enum");
+            if (nameDialog.ShowModal() != wxID_OK)
+            {
+                return;
+            }
+            const std::string name = ToStd(nameDialog.GetValue().Strip(wxString::both));
+            if (name.empty())
+            {
+                return;
+            }
+            for (const auto& entry : enums)
+            {
+                if (entry.first == name)
+                {
+                    wxMessageBox("Enum '" + ToWx(name) + "' already exists.", kApplicationName,
+                                 wxOK | wxICON_WARNING, &dialog);
+                    return;
+                }
+            }
+            storeCurrent();
+            enums.emplace_back(name, std::vector<std::string>());
+            nameList->Append(ToWx(name));
+            nameList->SetSelection(static_cast<int>(enums.size()) - 1);
+            showSelection(static_cast<int>(enums.size()) - 1);
+            valuesText->SetFocus();
+        });
+        deleteEnumButton->Bind(wxEVT_BUTTON, [&](wxCommandEvent&)
+        {
+            const int index = nameList->GetSelection();
+            if (index < 0)
+            {
+                return;
+            }
+            enums.erase(enums.begin() + index);
+            nameList->Delete(index);
+            const int next = enums.empty() ? wxNOT_FOUND : std::min(index, static_cast<int>(enums.size()) - 1);
+            if (next >= 0)
+            {
+                nameList->SetSelection(next);
+            }
+            showSelection(next);
+        });
+
+        dialog.SetSizerAndFit(sizer);
+        dialog.CentreOnParent();
+        if (dialog.ShowModal() != wxID_OK)
+        {
+            return;
+        }
+        storeCurrent();
+
+        m_specification.SetEnums(enums);
+        m_contentChanged = true;
+        RefreshAll();
+        SetStatusText(wxString::Format("Enums updated (%d)", static_cast<int>(enums.size())), 0);
+    }
+
     void MainFrame::OnAddWithVspecFile(wxCommandEvent&)
     {
         if (!IsVspecAvailable())
@@ -900,6 +1111,12 @@ namespace afd
             {
                 ++added;
             }
+            else
+            {
+                wxMessageBox("Could not add signals: dataInterfaces is not a sequence.",
+                             kApplicationName, wxOK | wxICON_ERROR, this);
+                break;
+            }
         }
 
         if (added > 0)
@@ -925,6 +1142,8 @@ namespace afd
         const std::vector<std::string> fields = m_metaModel.ColumnsFor(interfaceType, {});
         if (fields.empty())
         {
+            wxMessageBox("Cannot add an item: the meta model has no fields for " + ToWx(interfaceType) + ".",
+                         kApplicationName, wxOK | wxICON_ERROR, this);
             return;
         }
 
@@ -939,6 +1158,8 @@ namespace afd
         wxFlexGridSizer* fieldSizer = new wxFlexGridSizer(2, 6, 8);
         fieldSizer->AddGrowableCol(1, 1);
         std::vector<std::pair<std::string, wxTextCtrl*>> controls;
+        wxTextCtrl* dataTypeControl = nullptr;
+        wxTextCtrl* enumRefControl = nullptr;
         for (const std::string& field : fields)
         {
             const bool isSupervisionRequired =
@@ -978,12 +1199,48 @@ namespace afd
             }
             else if (isSupervisionRequired)
             {
-                control->SetValue("false");
+                control->SetValue(kFalseKey);
                 control->SetEditable(false);
+            }
+
+            if (field == FunctionSpecification::kDataTypeKey)
+            {
+                dataTypeControl = control;
             }
 
             fieldSizer->Add(control, 1, wxEXPAND);
             controls.emplace_back(fieldName, control);
+
+            if (field == FunctionSpecification::kDataTypeKey && dataTypeControl)
+            {
+                fieldSizer->Add(new wxStaticText(&dialog, wxID_ANY, ToWx(kEnumRefKey)), 0,
+                                wxALIGN_CENTER_VERTICAL);
+                enumRefControl = new wxTextCtrl(&dialog, wxID_ANY);
+                enumRefControl->SetEditable(false);
+                fieldSizer->Add(enumRefControl, 1, wxEXPAND);
+                controls.emplace_back(kEnumRefKey, enumRefControl);
+
+                dataTypeControl->Bind(wxEVT_TEXT,
+                    [dataTypeControl, enumRefControl](wxEvent&)
+                    {
+                        wxTextCtrl* dataType = dynamic_cast<wxTextCtrl*>(dataTypeControl);
+                        wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>(enumRefControl);
+                        if (dataType && textCtrl)
+                        {
+                            wxString value = dataType->GetValue();
+                            value = value.Trim();
+                            if (value == ToWx(kEnumKey))
+                            {
+                                textCtrl->SetEditable(true);
+                            }
+                            else
+                            {
+                                textCtrl->SetEditable(false);
+                                textCtrl->Clear();
+                            }
+                        }
+                    });
+            }
         }
 
         sizer->Add(fieldSizer, 1, wxEXPAND | wxALL, 12);
@@ -997,23 +1254,34 @@ namespace afd
         }
 
         YamlNodePtr item = YamlNode::MakeMap();
+        std::string dataTypeValue;
+        std::string enumRefValue;
         for (const auto& control : controls)
         {
-            if (interfaceType == kSchedulingInterfaceTypeKey && control.first == kExecutionResultKey)
+            if (control.first == FunctionSpecification::kDataTypeKey)
+            {
+                dataTypeValue = ToStd(control.second->GetValue());
+            }
+            else if (control.first == kEnumRefKey)
+            {
+                enumRefValue = ToStd(control.second->GetValue());
+                continue;
+            }
+            else if (interfaceType == kSchedulingInterfaceTypeKey && control.first == kExecutionResultKey)
             {
                 YamlNodePtr result = YamlNode::MakeMap();
                 result->Set(kExecutionResultTypeKey, YamlNode::MakeScalar(ToStd(control.second->GetValue())));
                 item->Set(control.first, std::move(result));
                 continue;
             }
-            if (interfaceType == kSchedulingInterfaceTypeKey && control.first == kSupervisionRequiredKey)
+            else if (interfaceType == kSchedulingInterfaceTypeKey && control.first == kSupervisionRequiredKey)
             {
                 YamlNodePtr supervision = YamlNode::MakeMap();
                 supervision->Set(kSupervisionRequiredKey, YamlNode::MakeScalar(ToStd(control.second->GetValue())));
                 item->Set(kSupervisionKey, std::move(supervision));
                 continue;
             }
-            if (interfaceType == kDataInterfaceTypeKey && control.first == kQualityCodeKey)
+            else if (interfaceType == kDataInterfaceTypeKey && control.first == kQualityCodeKey)
             {
                 const std::string name = ToStd(control.second->GetValue());
                 if (!name.empty())
@@ -1030,11 +1298,22 @@ namespace afd
             }
             item->Set(control.first, YamlNode::MakeScalar(ToStd(control.second->GetValue())));
         }
+
+        if (dataTypeValue == kEnumKey && !enumRefValue.empty())
+        {
+            item->Set(kEnumRefKey, YamlNode::MakeScalar(enumRefValue));
+        }
+
         if (m_specification.AddCollectionItem(collectionKey, std::move(item)))
         {
             m_contentChanged = true;
             RefreshAll();
             SetStatusText("Added item", 0);
+        }
+        else
+        {
+            wxMessageBox("Could not add item: " + ToWx(collectionKey) + " is not a sequence.",
+                         kApplicationName, wxOK | wxICON_ERROR, this);
         }
     }
 
@@ -1101,9 +1380,11 @@ namespace afd
         std::vector<EditableValue> editableValues;
         YamlNodePtr editedSupervision;
         wxTextCtrl* supervisionRequiredControl = nullptr;
+        wxTextCtrl* dataTypeControl = nullptr;
+        wxTextCtrl* enumRefControl = nullptr;
 
         const auto addField =
-            [&fields, &editableValues, &dialog, &supervisionRequiredControl]
+            [&fields, &editableValues, &dialog, &supervisionRequiredControl, &dataTypeControl, &enumRefControl, &entries, selectedRow]
             (const wxString& name, const YamlNodePtr& node, bool readOnly)
         {
             if (!node || !node->IsScalar())
@@ -1137,6 +1418,54 @@ namespace afd
             if (name == ToWx(kSupervisionRequiredPath))
             {
                 supervisionRequiredControl = control;
+            }
+            if (name == ToWx(FunctionSpecification::kDataTypeKey))
+            {
+                dataTypeControl = control;
+                if (!readOnly && !editableValues.empty())
+                {
+                    fields->Add(new wxStaticText(&dialog, wxID_ANY, ToWx(kEnumRefKey)), 0,
+                                wxALIGN_CENTER_VERTICAL);
+                    enumRefControl = new wxTextCtrl(&dialog, wxID_ANY);
+                    
+                    const YamlNodePtr existingEnumRef = entries[selectedRow]->Find(kEnumRefKey);
+                    if (existingEnumRef && existingEnumRef->IsScalar())
+                    {
+                        enumRefControl->SetValue(ToWx(existingEnumRef->GetScalar()));
+                    }
+                    
+                    if (control->GetValue() == ToWx(kEnumKey))
+                    {
+                        enumRefControl->SetEditable(true);
+                    }
+                    else
+                    {
+                        enumRefControl->SetEditable(false);
+                    }
+                    
+                    fields->Add(enumRefControl, 1, wxEXPAND);
+
+                    dataTypeControl->Bind(wxEVT_TEXT,
+                        [dataTypeControl, enumRefControl](wxEvent&)
+                        {
+                            wxTextCtrl* dataType = dynamic_cast<wxTextCtrl*>(dataTypeControl);
+                            wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>(enumRefControl);
+                            if (dataType && textCtrl)
+                            {
+                                wxString value = dataType->GetValue();
+                                value = value.Trim();
+                                if (value == ToWx(kEnumKey))
+                                {
+                                    textCtrl->SetEditable(true);
+                                }
+                                else
+                                {
+                                    textCtrl->SetEditable(false);
+                                    textCtrl->Clear();
+                                }
+                            }
+                        });
+                }
             }
             if (!readOnly)
             {
@@ -1173,6 +1502,51 @@ namespace afd
             {
                 addField(ToWx(entry.first), entry.second, false);
             }
+        }
+
+        if (enumRefControl == nullptr && dataTypeControl != nullptr)
+        {
+            fields->Add(new wxStaticText(&dialog, wxID_ANY, ToWx(kEnumRefKey)), 0,
+                        wxALIGN_CENTER_VERTICAL);
+            enumRefControl = new wxTextCtrl(&dialog, wxID_ANY);
+            const YamlNodePtr existingEnumRef = entries[selectedRow]->Find(kEnumRefKey);
+            if (existingEnumRef && existingEnumRef->IsScalar())
+            {
+                enumRefControl->SetValue(ToWx(existingEnumRef->GetScalar()));
+            }
+            
+            const std::string currentDataType = ToStd(dataTypeControl->GetValue()).c_str();
+            if (currentDataType == kEnumKey)
+            {
+                enumRefControl->SetEditable(true);
+            }
+            else
+            {
+                enumRefControl->SetEditable(false);
+            }
+            
+            fields->Add(enumRefControl, 1, wxEXPAND);
+
+            dataTypeControl->Bind(wxEVT_TEXT,
+                [dataTypeControl, enumRefControl](wxEvent&)
+                {
+                    wxTextCtrl* dataType = dynamic_cast<wxTextCtrl*>(dataTypeControl);
+                    wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>(enumRefControl);
+                    if (dataType && textCtrl)
+                    {
+                        wxString value = dataType->GetValue();
+                        value = value.Trim();
+                        if (value == ToWx(kEnumKey))
+                        {
+                            textCtrl->SetEditable(true);
+                        }
+                        else
+                        {
+                            textCtrl->SetEditable(false);
+                            textCtrl->Clear();
+                        }
+                    }
+                });
         }
 
         if (editableValues.empty())
@@ -1245,6 +1619,17 @@ namespace afd
         {
             value.node->SetScalar(ToStd(value.control->GetValue()));
         }
+
+        if (dataTypeControl && enumRefControl)
+        {
+            const std::string dataTypeValue = ToStd(dataTypeControl->GetValue());
+            const std::string enumRefValue = ToStd(enumRefControl->GetValue());
+            if (dataTypeValue == kEnumKey && !enumRefValue.empty())
+            {
+                entries[selectedRow]->Set(kEnumRefKey, YamlNode::MakeScalar(enumRefValue));
+            }
+        }
+
         if (editedSupervision)
         {
             entries[selectedRow]->Set(kSupervisionKey, std::move(editedSupervision));
@@ -1382,11 +1767,9 @@ namespace afd
             return false;
         }
 
-        std::string content = m_specification.ToText();
         std::string error;
-
         ValidateFunction validateFunction;
-        if (validateFunction.SyntaxCheckIsOK(m_metaModel, content, error))
+        if (validateFunction.SyntaxCheckIsOK(m_metaModel, m_specification.ToText(), error))
         {
             if (!doNotShowOnSuccess)
             {
@@ -1541,7 +1924,8 @@ namespace afd
             sizer->Add(new wxStaticBitmap(&dialog, wxID_ANY, wxBitmap(logoImage)), 0,
                        wxALIGN_CENTER_HORIZONTAL | wxALL, 12);
         }
-        sizer->Add(new wxStaticText(&dialog, wxID_ANY, wxString(kApplicationName) + "\n\n"
+        sizer->Add(new wxStaticText(&dialog, wxID_ANY, wxString(kApplicationName)
+                    + " - " + wxString(kApplicationVersion) + "\n\n"
                     "Reads, displays and writes Eclipse autoapiframework function\n"
                     "specifications (*.afs, YAML content) based on the framework meta model.",
                     wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL),
@@ -1562,10 +1946,11 @@ namespace afd
 
     void MainFrame::OnQuickTips(wxCommandEvent&)
     {
-        std::string title = "";
+        std::string title = "Quick Tips:\n";
         wxMessageBox( title + "\nThe automatic syntax check performed before saving a file to disk can be disabled.\n" +
                      "\nAdd 'null' to mandatory properties so that they are accepted by the syntax check.\n"         
                      "\nThe supervision node on the Scheduling collection is editable in the 'Edit scheduling item' dialog.\n" +
+                     "\nExisting *.afs files can be opened by dragging and dropping them onto the application window.\n" +
                      "\nAPI creation is not implemented yet.",
                      kApplicationName,
                      wxOK | wxICON_INFORMATION, this);
@@ -1573,10 +1958,31 @@ namespace afd
 
     void MainFrame::OnHelp(wxCommandEvent&) { wxLaunchDefaultBrowser(kHelpUrl); }
 
-    void MainFrame::OnExit(wxCommandEvent&) { Close(true); }
+    void MainFrame::OnExit(wxCommandEvent&) { Close(); }
+
+    void MainFrame::OnClose(wxCloseEvent& event)
+    {
+        if (event.CanVeto() && m_contentChanged &&
+            wxMessageBox("The current function specification has unsaved changes.\n\n"
+                         "Discard changes and close the application?",
+                         kApplicationName, wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, this) != wxYES)
+        {
+            event.Veto();
+            return;
+        }
+        event.Skip();
+    }
 
     void MainFrame::LoadSpecification(const wxString& path) 
     {
+        if (m_contentChanged &&
+            wxMessageBox("The current function specification has unsaved changes.\n\n"
+                         "Discard changes and open another file?",
+                         kApplicationName, wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, this) != wxYES)
+        {
+            return;
+        }
+
         std::string error;
         FunctionSpecification specification;
         if (!specification.Load(m_metaModel.GetVersion(), ToStd(path), error)) 
@@ -1587,6 +1993,7 @@ namespace afd
         }
         m_contentChanged = false;
         m_specification = std::move(specification);
+        AddRecentFile(path);
         m_newButton->Enable(false);
         GetMenuBar()->Enable(ID_NewSpecification, false);
         m_saveButton->Enable(m_saveButton);
@@ -1599,6 +2006,76 @@ namespace afd
 		m_createAPIButton->Enable(true);
         RefreshAll();
         UpdateTitleAndStatus();
+    }
+
+    void MainFrame::AddRecentFile(const wxString& path)
+    {
+        wxConfigBase* config = wxConfigBase::Get();
+        long count = 0;
+        config->Read(wxString(kRecentFilesConfigKey) + "/Count", &count, 0);
+
+        const wxString fullPath = wxFileName(path).GetFullPath();
+        wxArrayString recentFiles;
+        recentFiles.Add(fullPath);
+        for (long index = 0; index < count && index < kMaxRecentFiles; ++index)
+        {
+            wxString recentPath;
+            config->Read(wxString(kRecentFilesConfigKey) + "/" + wxString::Format("%ld", index),
+                         &recentPath);
+            if (!recentPath.empty() && recentPath != fullPath &&
+                recentFiles.size() < static_cast<unsigned int>(kMaxRecentFiles))
+            {
+                recentFiles.Add(recentPath);
+            }
+        }
+
+        config->Write(wxString(kRecentFilesConfigKey) + "/Count",
+                      static_cast<long>(recentFiles.size()));
+        for (std::size_t index = 0; index < recentFiles.size(); ++index)
+        {
+            config->Write(wxString(kRecentFilesConfigKey) + "/" +
+                          wxString::Format("%lu", static_cast<unsigned long>(index)),
+                          recentFiles[index]);
+        }
+        config->Flush();
+        RefreshRecentFiles();
+    }
+
+    void MainFrame::RefreshRecentFiles()
+    {
+        for (int id = ID_RecentFiles; id <= ID_RecentFilesLast; ++id)
+        {
+            if (m_recentFilesMenu->FindItem(id))
+            {
+                m_recentFilesMenu->Delete(id);
+            }
+        }
+        if (m_recentFilesMenu->FindItem(ID_NoRecentFiles))
+        {
+            m_recentFilesMenu->Delete(ID_NoRecentFiles);
+        }
+        wxConfigBase* config = wxConfigBase::Get();
+        long count = 0;
+        config->Read(wxString(kRecentFilesConfigKey) + "/Count", &count, 0);
+        count = std::max(0L, std::min(count, static_cast<long>(kMaxRecentFiles)));
+
+        int itemCount = 0;
+        for (long index = 0; index < count; ++index)
+        {
+            wxString path;
+            if (config->Read(wxString(kRecentFilesConfigKey) + "/" +
+                             wxString::Format("%ld", index), &path) && !path.empty())
+            {
+                m_recentFilesMenu->Append(ID_RecentFiles + static_cast<int>(index), path);
+                ++itemCount;
+            }
+        }
+
+        if (itemCount == 0)
+        {
+            wxMenuItem* emptyItem = m_recentFilesMenu->Append(ID_NoRecentFiles, "No recent files");
+            emptyItem->Enable(false);
+        }
     }
 
     bool MainFrame::LoadMetaModel(const wxString& path, bool reportErrors) 
@@ -1621,8 +2098,8 @@ namespace afd
 
     void MainFrame::RefreshAll() 
     {
-        GetMenuBar()->Enable(ID_SaveSpecification, m_contentChanged);	        
-        m_saveButton->Enable(m_contentChanged);  
+        UpdateSaveButtonState();
+        m_editEnumsButton->Enable(m_specification.IsLoaded());
         FillAttributes();
         FillCollection(m_signalList, FunctionSpecification::kDataInterfacesKey, kDataInterfaceTypeKey);
         FillCollection(m_parameterList, FunctionSpecification::kParametersKey, kParameterInterfaceTypeKey);
@@ -1644,6 +2121,12 @@ namespace afd
         UpdateCollectionButtonStates();
     }
 
+    void MainFrame::UpdateSaveButtonState()
+    {
+        GetMenuBar()->Enable(ID_SaveSpecification, m_contentChanged);
+        m_saveButton->Enable(m_contentChanged);
+    }
+
     void MainFrame::FillAttributes() 
     {
         m_attributeList->DeleteAllItems();
@@ -1659,9 +2142,9 @@ namespace afd
             m_attributeList->SetItem(row, 1, OneLine(attribute.second));
             ++row;
         }
-        m_nameText->SetValue(ToWx(m_specification.GetName()));
-        m_versionText->SetValue(ToWx(m_specification.GetVersion()));
-        m_descriptionText->SetValue(ToWx(m_specification.GetDescription()));
+        m_nameText->ChangeValue(ToWx(m_specification.GetName()));
+        m_versionText->ChangeValue(ToWx(m_specification.GetVersion()));
+        m_descriptionText->ChangeValue(ToWx(m_specification.GetDescription()));
     }
 
     void MainFrame::FillCollection(wxListCtrl* list, const std::string& collectionKey,

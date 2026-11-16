@@ -27,6 +27,11 @@ Graphical user interface (GUI)
 .. figure:: figures/meta_model_window.png
    :alt: meta model window
 
+.. tip::
+
+   In addition to the standard file open dialog, the application provides drag-and-drop functionality. 
+   For quick access, users can open an existing ``.afs`` file by dragging it from the operating system's file manager and dropping it onto the graphical user interface.
+
 Command-line application (CLI)
 ------------------------------ 
 
@@ -217,4 +222,7 @@ In addition to the help documentation, the application can check whether the
 COVESA tools are installed correctly. This information can help with
 troubleshooting and verifying that all required dependencies are available.
 
-The **Quick Tips** section provides additional guidance.
+The **Quick Tips** section provides concise guidance on using the Function Designer effectively, highlighting common tasks and best practices.
+
+.. figure:: figures/quick_tips.png
+   :alt: quick tips

@@ -12,6 +12,7 @@
  *
  * Contributors:
  *   Thomas Pfleiderer - initial function designer
+ *   Thomas Pfleiderer - support 4.1, Support YAML comments, Drag & Drop, Enums in afs files added
  ********************************************************************************/
  
 #ifndef AFD_MAIN_FRAME_H
@@ -26,10 +27,12 @@
 
 class wxListCtrl;
 class wxNotebook;
+class wxMenu;
 
 namespace afd 
 {
-    static constexpr const char* kApplicationName = "AutoAPI Function Designer - Preview 0.1";
+    static constexpr const char* kApplicationName = "AutoAPI Function Designer";
+    static constexpr const char* kApplicationVersion = "Version 0.2";
 
     /// Main window of the AutoAPI Function Designer application.
     class MainFrame : public wxFrame 
@@ -42,6 +45,9 @@ namespace afd
         {
             ID_NewSpecification = wxID_HIGHEST + 1,
             ID_OpenSpecification,
+            ID_RecentFiles,
+            ID_RecentFilesLast = ID_RecentFiles + 9,
+            ID_NoRecentFiles = ID_RecentFilesLast + 1,
             ID_SaveSpecification,
             ID_SaveSpecificationAs,
             ID_OpenMetaModel,
@@ -50,6 +56,7 @@ namespace afd
             ID_GetVssToolsVersion,
             ID_QuickTips,            
             ID_AddVWithVspecFile,
+            ID_EditEnums,
             ID_Add,
             ID_Delete,
             ID_Edit,
@@ -64,6 +71,8 @@ namespace afd
 
         void OnNewSpecification(wxCommandEvent& event);
         void OnOpenSpecification(wxCommandEvent& event);
+        void OnDropFiles(wxDropFilesEvent& event);
+        void OnRecentFileSelected(wxCommandEvent& event);
         void OnSaveSpecification(wxCommandEvent& event);
         void OnSaveSpecificationAs(wxCommandEvent& event);
         void OnOpenMetaModel(wxCommandEvent& event);
@@ -72,6 +81,7 @@ namespace afd
         void OnGetVssToolVersion(wxCommandEvent& event);
         void OnQuickTips(wxCommandEvent& event);      
         void OnAddWithVspecFile(wxCommandEvent& event);     
+        void OnEditEnums(wxCommandEvent& event);
         void OnAdd(wxCommandEvent& event);
         void OnDelete(wxCommandEvent& event);
         void OnEdit(wxCommandEvent& event);
@@ -81,9 +91,13 @@ namespace afd
         void OnAbout(wxCommandEvent& event);   
         void OnHelp(wxCommandEvent& event);
         void OnExit(wxCommandEvent& event);
+        void OnClose(wxCloseEvent& event);
 
         void LoadSpecification(const wxString& path);
+        void AddRecentFile(const wxString& path);
+        void RefreshRecentFiles();
         bool LoadMetaModel(const wxString& path, bool reportErrors);
+        void UpdateSaveButtonState();
 
         bool SyntaxCheckIsOK(bool doNotShowOnSuccess, const std::string& contextMessage = "");
 
@@ -115,12 +129,14 @@ namespace afd
         wxStaticText* m_metaModelLabel = nullptr;
         wxButton* m_newButton = nullptr;
         wxButton* m_readButton = nullptr;
+        wxMenu* m_recentFilesMenu = nullptr;
         wxButton* m_metaButton = nullptr;
         wxButton* m_showMetaModelButton = nullptr;
         wxButton* m_settingsButton = nullptr;
         wxButton* m_saveButton = nullptr;
         wxButton* m_saveAsButton = nullptr;
         wxButton* m_addWithVspecFileButton = nullptr;
+        wxButton* m_editEnumsButton = nullptr;
         wxButton* m_addButton = nullptr;
         wxButton* m_deleteButton = nullptr;
         wxButton* m_editButton = nullptr;
