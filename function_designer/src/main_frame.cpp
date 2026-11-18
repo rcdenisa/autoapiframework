@@ -993,6 +993,14 @@ namespace afd
             return;
         }
 
+        const auto selectedCollection = m_notebook->GetSelection();
+        if ((selectedCollection < 1) || (selectedCollection > 2))
+        {
+            wxMessageBox("Only for signal or parameter collections.",
+                         kApplicationName, wxOK | wxICON_ERROR, this);
+            return;
+        }        
+
         wxString vspecDirectory;
         wxConfigBase::Get()->Read(kVspecDirectoryConfigKey, &vspecDirectory);
 
@@ -1062,7 +1070,26 @@ namespace afd
             return;
         }
 
-        const std::vector<std::string> fields = m_metaModel.ColumnsFor(kDataInterfaceTypeKey, {});
+        // Get fields from signals or parameter collection based on the current notebook selection
+        const std::vector<std::string> fields = [&]() -> std::vector<std::string>
+        {
+            if (selectedCollection == 1)
+            {
+                return m_metaModel.ColumnsFor(kDataInterfaceTypeKey, {});
+            }
+            else if (selectedCollection == 2)
+            {
+                return m_metaModel.ColumnsFor(kParameterInterfaceTypeKey, {});
+            }
+
+            return {};
+        }();
+
+        if (fields.empty())
+        {
+            return;
+        }
+
         std::size_t added = 0;
         for (const VssSignal& signal : selected)
         {
@@ -1124,7 +1151,11 @@ namespace afd
                 }
                 item->Set(field, YamlNode::MakeScalar(value));
             }
-            if (m_specification.AddCollectionItem(FunctionSpecification::kDataInterfacesKey, std::move(item)))
+            if ((selectedCollection == 1) && m_specification.AddCollectionItem(FunctionSpecification::kDataInterfacesKey, std::move(item)))
+            {
+                ++added;
+            }
+            else if ((selectedCollection == 2) && m_specification.AddCollectionItem(FunctionSpecification::kParametersKey, std::move(item)))
             {
                 ++added;
             }
@@ -2318,7 +2349,7 @@ namespace afd
     {
         wxListCtrl* selectedList = GetSelectedCollectionList();
         const bool hasSelectedItem = selectedList && selectedList->GetSelectedItemCount() > 0;
-        m_addWithVspecFileButton->Enable(m_notebook->GetSelection() == 1);
+        m_addWithVspecFileButton->Enable((m_notebook->GetSelection() == 1) || (m_notebook->GetSelection() == 2));
         m_addButton->Enable(selectedList != nullptr);
         m_deleteButton->Enable(hasSelectedItem);
         m_editButton->Enable(hasSelectedItem);
