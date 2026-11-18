@@ -98,6 +98,56 @@ namespace
         Require(!error.empty(), "invalid input did not report an error");
     }
 
+    void TestMultiLinePlainScalar()
+    {
+        // A plain value written right after the key may continue on the next,
+        // deeper indented line(s) - this is valid YAML (e.g. a two-line description).
+        afd::YamlParser parser;
+        const afd::YamlNodePtr root = Parse(parser,
+            "scheduling:\n"
+            "  - functionName: Example.Step\n"
+            "    description: 20 ms cyclic runnable that performs source fusion\n"
+            "      and publishes Vehicle.Speed.\n"
+            "    cycleTimeMs: 20\n"
+            "  - functionName: Example.Terminate\n"
+            "    description: Single line.\n");
+
+        const afd::YamlNodePtr scheduling = root->Find("scheduling");
+        Require(scheduling && scheduling->IsSequence() && scheduling->GetSequence().size() == 2,
+                "multi-line plain scalar broke the surrounding sequence");
+        const afd::YamlNodePtr step = scheduling->GetSequence()[0];
+        Require(step->ScalarOf("description") ==
+                "20 ms cyclic runnable that performs source fusion and publishes Vehicle.Speed.",
+                "multi-line plain scalar was not joined into one value");
+        Require(step->ScalarOf("cycleTimeMs") == "20",
+                "key after a multi-line plain scalar was lost");
+        Require(scheduling->GetSequence()[1]->ScalarOf("description") == "Single line.",
+                "single-line plain scalar changed");
+
+        // A blank line inside a multi-line plain scalar becomes a line break.
+        const afd::YamlNodePtr paragraphs = Parse(parser,
+            "description: first paragraph\n"
+            "  continues here\n"
+            "\n"
+            "  second paragraph\n"
+            "next: value\n");
+        Require(paragraphs->ScalarOf("description") == "first paragraph continues here\nsecond paragraph",
+                "blank line inside a multi-line plain scalar was not kept as a line break");
+        Require(paragraphs->ScalarOf("next") == "value", "key after a multi-paragraph scalar was lost");
+
+        // A deeper indented line that looks like a new key is still an error, as in YAML.
+        std::string error;
+        Require(parser.ParseText("description: text\n  other: value\n", error) == nullptr,
+                "a nested key after a scalar value was accepted");
+
+        // Saving and re-reading keeps the joined value (GUI save round trip).
+        afd::YamlWriter writer;
+        const afd::YamlNodePtr reread = Parse(parser, writer.WriteText(root));
+        Require(reread->Find("scheduling")->GetSequence()[0]->ScalarOf("description") ==
+                "20 ms cyclic runnable that performs source fusion and publishes Vehicle.Speed.",
+                "multi-line plain scalar changed after a write/read round trip");
+    }
+
     void TestExampleRoundTrips()
     {
         const std::vector<std::string> examples = {
@@ -450,6 +500,7 @@ int main()
         // Original tests        
         {"TestOrderedNodes", TestOrderedNodes},
         {"TestScalarsAndInvalidInput", TestScalarsAndInvalidInput},
+        {"TestMultiLinePlainScalar", TestMultiLinePlainScalar},
         {"TestExampleRoundTrips", TestExampleRoundTrips},     
         {"TestAddMissingCollections", TestAddMissingCollections},
         {"TestSequenceMapLeadingCommentRoundTrip", TestSequenceMapLeadingCommentRoundTrip},

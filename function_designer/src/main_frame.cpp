@@ -50,6 +50,8 @@ namespace afd
         constexpr const char* kVspecDirectoryConfigKey = "/Paths/VSpecDirectory";
         constexpr const char* kRecentFilesConfigKey = "/Paths/RecentFiles";
         constexpr const char* kCreateApiLanguageConfigKey = "/CreateAPI/Language";
+        constexpr const char* kCreateApiOutputDirConfigKey = "/CreateAPI/OutputDirectory";
+        constexpr const char* kCreateApiEnumsDirConfigKey = "/CreateAPI/EnumsDirectory";
         constexpr const char* kDisableSyntaxCheckBeforeSavingConfigKey = "/Settings/DisableSyntaxCheckBeforeSaving";
         constexpr const char* kLogoFileName = "autoapiframework_logo.png";
         constexpr const char* kLogoFileNameLarge = "autoapiframework_logo_large.png";		
@@ -691,9 +693,13 @@ namespace afd
         wxConfigBase* config = wxConfigBase::Get();
         wxString metaModelFile = kMetaModelFileName;
         wxString vspecDirectory;
+        wxString apiOutputDirectory;
+        wxString enumsDirectory;
         bool disableSyntaxCheckBeforeSaving = false;
         config->Read(kMetaModelFileConfigKey, &metaModelFile);
         config->Read(kVspecDirectoryConfigKey, &vspecDirectory);
+        config->Read(kCreateApiOutputDirConfigKey, &apiOutputDirectory);
+        config->Read(kCreateApiEnumsDirConfigKey, &enumsDirectory);
         config->Read(kDisableSyntaxCheckBeforeSavingConfigKey, &disableSyntaxCheckBeforeSaving, false);
 
         MetaModel metaModel;
@@ -712,6 +718,8 @@ namespace afd
 
         wxTextCtrl* metaModelControl = new wxTextCtrl(&dialog, wxID_ANY, metaModelFile);
         wxTextCtrl* vspecControl = new wxTextCtrl(&dialog, wxID_ANY, vspecDirectory);
+        wxTextCtrl* apiOutputControl = new wxTextCtrl(&dialog, wxID_ANY, apiOutputDirectory);
+        wxTextCtrl* enumsControl = new wxTextCtrl(&dialog, wxID_ANY, enumsDirectory);
         wxCheckBox* disableSyntaxCheckControl = new wxCheckBox(
             &dialog, wxID_ANY, "Syntax check disabled before saving the file.");
         disableSyntaxCheckControl->SetValue(disableSyntaxCheckBeforeSaving);
@@ -755,7 +763,10 @@ namespace afd
                 if (!selectedPath.empty())
                 {
                     control->SetValue(selectedPath);
-                    versionLabel->SetLabel(getVersion(selectedPath));
+                    if (versionLabel)
+                    {
+                        versionLabel->SetLabel(getVersion(selectedPath));
+                    }
                     dialog.Fit();
                 }
             });
@@ -784,6 +795,10 @@ namespace afd
                      const wxString version = ToWx(GetGitTagAndVersion("VSS version: ", path));
                      return version.IsEmpty() ? wxString("Version: unknown") : version;
                  });
+        addField("Generated API folder", apiOutputControl, false, nullptr,
+                 [](const wxString&) { return wxString(); });
+        addField("Shared enums folder", enumsControl, false, nullptr,
+                 [](const wxString&) { return wxString(); });
 
         dialogSizer->Add(fields, 1, wxEXPAND | wxALL, 12);
         dialogSizer->Add(disableSyntaxCheckControl, 0, wxLEFT | wxRIGHT | wxBOTTOM, 12);
@@ -798,6 +813,8 @@ namespace afd
 
         config->Write(kMetaModelFileConfigKey, metaModelControl->GetValue());
         config->Write(kVspecDirectoryConfigKey, vspecControl->GetValue());
+        config->Write(kCreateApiOutputDirConfigKey, apiOutputControl->GetValue());
+        config->Write(kCreateApiEnumsDirConfigKey, enumsControl->GetValue());
         config->Write(kDisableSyntaxCheckBeforeSavingConfigKey, disableSyntaxCheckControl->GetValue());
         config->Flush();
         SetStatusText("Global settings updated", 0);
@@ -1837,7 +1854,7 @@ namespace afd
             return;
         }
 
-        // --- Language selection ---
+        // --- Language selection (pre-selects the language used last time) ---
         const wxArrayString languages = {"C++", "C", "Rust"};
         wxSingleChoiceDialog langDialog(this, "Select target language for adapter generation:",
                                         "Create API", languages);
@@ -1861,33 +1878,27 @@ namespace afd
 
         // Map display name to --language argument value
         wxString languageArg;
-        if (selectedLanguage == "C++")       languageArg = "cpp";
-        else if (selectedLanguage == "C")    languageArg = "c";
+        if (selectedLanguage == "C")         languageArg = "c";
         else if (selectedLanguage == "Rust") languageArg = "rust";
         else                                 languageArg = "cpp";
 
-        // --- Output directory for adapter files ---
-        wxDirDialog dirDialog(this,
-                              "Select output directory for generated adapter",
-                              wxFileName(afsPath).GetPath(),
-                              wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
-        if (dirDialog.ShowModal() != wxID_OK)
+        // --- Output directory (configured in Settings, defaults to the .afs folder) ---
+        wxString outputDir;
+        wxConfigBase::Get()->Read(kCreateApiOutputDirConfigKey, &outputDir);
+        if (outputDir.IsEmpty() || !wxFileName::DirExists(outputDir))
         {
-            return;
+            outputDir = wxFileName(afsPath).GetPath();
         }
-        const wxString outputDir = dirDialog.GetPath();
 
-        // --- Output directory for shared enums file ---
-        wxDirDialog enumsDialog(this,
-                                "Select directory for shared autoapiframework_enums file\n"
-                                "(shared across all generated adapters - use a fixed framework include directory)",
-                                outputDir,
-                                wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
-        if (enumsDialog.ShowModal() != wxID_OK)
+        // --- Shared enums directory (configured in Settings, defaults to the output directory) ---
+        // The generator creates the enums file there if it is missing and leaves it
+        // untouched when it already exists for the current meta model version.
+        wxString enumsDir;
+        wxConfigBase::Get()->Read(kCreateApiEnumsDirConfigKey, &enumsDir);
+        if (enumsDir.IsEmpty() || !wxFileName::DirExists(enumsDir))
         {
-            return;
+            enumsDir = outputDir;
         }
-        const wxString enumsDir = enumsDialog.GetPath();
 
         wxArrayString output, errors;
         const long rc = RunPythonScript(
@@ -1902,7 +1913,9 @@ namespace afd
 
         if (rc == 0)
         {
-            wxMessageBox("Adapter generated successfully (" + selectedLanguage + ").\n\n" + result,
+            wxMessageBox("Adapter generated successfully (" + selectedLanguage + ").\n\n" + result +
+                         "\nOutput folder: " + outputDir +
+                         "\n(Output folder and enums folder can be changed in Settings.)",
                          kApplicationName, wxOK | wxICON_INFORMATION, this);
         }
         else

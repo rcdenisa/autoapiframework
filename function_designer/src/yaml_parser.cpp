@@ -456,6 +456,52 @@ namespace afd
                 return sequence;
             }
 
+            /// Multi-line plain scalar: in YAML a plain value may continue on the
+            /// following lines as long as they are indented deeper than the key.
+            /// The lines are folded into one value separated by single spaces;
+            /// a blank line inside the value becomes a line break.
+            ///
+            ///   description: first part of the text
+            ///     second part of the text
+            std::string ParsePlainContinuation(int keyIndent, const std::string& firstLine)
+            {
+                std::string value = firstLine;
+                bool pendingLineBreak = false;
+                while (!AtEnd())
+                {
+                    const std::string& line = m_lines[m_index];
+                    const std::string trimmed = Trim(line);
+                    if (trimmed.empty())
+                    {
+                        // A blank line only belongs to the value if more continuation follows.
+                        const int nextIndent = PeekIndent();
+                        if (nextIndent == kNoIndent || nextIndent <= keyIndent)
+                        {
+                            break;
+                        }
+                        pendingLineBreak = true;
+                        ++m_index;
+                        continue;
+                    }
+                    if (IndentOf(line) <= keyIndent || trimmed[0] == '#')
+                    {
+                        break;
+                    }
+                    // A continuation line must not start a new mapping entry or sequence item.
+                    if (trimmed == "-" || trimmed.rfind("- ", 0) == 0 ||
+                        FindKeySeparator(trimmed) != std::string::npos)
+                    {
+                        break;
+                    }
+                    const std::string text = ExtractComment(trimmed).first;
+                    value += pendingLineBreak ? "\n" : " ";
+                    value += Trim(text);
+                    pendingLineBreak = false;
+                    ++m_index;
+                }
+                return value;
+            }
+
             YamlNodePtr ParseValue(int keyIndent, const std::string& rest) 
             {
                 if (rest == "{}")
@@ -473,8 +519,12 @@ namespace afd
                 if (!rest.empty()) 
                 {
                     ScalarStyle style = ScalarStyle::Plain;
-                    const std::string value = Unquote(rest, style);
-                    return YamlNode::MakeScalar(value, style);
+                    const std::string firstLine = Unquote(rest, style);
+                    if (style != ScalarStyle::Plain)
+                    {
+                        return YamlNode::MakeScalar(firstLine, style);
+                    }
+                    return YamlNode::MakeScalar(ParsePlainContinuation(keyIndent, firstLine), style);
                 }
                 const int childIndent = PeekIndent();
                 if (childIndent == kNoIndent || childIndent < keyIndent) 
