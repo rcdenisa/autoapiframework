@@ -7,13 +7,13 @@ use crate::autoapiframework_enums::{DataQuality, ErrorSeverity, FunctionResult};
 
 // ---------------------------------------------------------------------------
 // Function: {{ spec.name }} {{ spec.version }}
-// {{ spec.description | wordwrap(75) | replace('\n', '\n// ') }}
+// {{ (spec.description or '') | wordwrap(75) | replace('\n', '\n// ') }}
 // ---------------------------------------------------------------------------
 
 {% if params %}
 // Parameters
 {% for p in params %}
-pub const K_{{ p.name | cpp_identifier | upper }}: {{ p.dataType | rust_type }} = {{ p.defaultValue | rust_literal(p.dataType) }}; // {{ p.unit }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %}
+pub const K_{{ p.name | cpp_identifier | upper }}: {{ p.dataType | rust_type }} = {{ p.defaultValue | rust_literal(p.dataType) }}; // {{ p.unit or '' }}{% if p.min is not none %} [{{ p.min }} .. {{ p.max }}]{% endif %}
 
 {% endfor %}
 {% endif %}
@@ -32,7 +32,9 @@ pub const STEP_MAX_EXECUTION_TIME_MS: u32 = {{ s.supervision.deadline.maxExecuti
 {% if e.severity %}
 pub const K_{{ e.name | cpp_identifier | upper }}_SEVERITY: ErrorSeverity = ErrorSeverity::{{ e.severity.value | capitalize }};
 {% endif %}
+{% if e.maturationTimeMs is not none %}
 pub const K_{{ e.name | cpp_identifier | upper }}_MATURATION_TIME_MS: u32 = {{ e.maturationTimeMs | int }}_u32;
+{% endif %}
 {% if e.resetTimeMs %}
 pub const K_{{ e.name | cpp_identifier | upper }}_RESET_TIME_MS: u32 = {{ e.resetTimeMs | int }}_u32;
 {% endif %}
@@ -116,7 +118,7 @@ impl {{ spec.name }} {
 {% endfor %}
         FunctionResult::Success
 {% elif s.runType.value == "cyclic" %}
-        // TODO: implement {{ spec.description | truncate(60, True, '...') }}
+        // TODO: implement {{ (spec.description or '') | truncate(60, True, '...') }}
         FunctionResult::Success
 {% elif s.runType.value == "terminate" %}
 {% for d in outputs %}

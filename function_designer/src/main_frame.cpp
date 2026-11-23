@@ -818,7 +818,7 @@ namespace afd
         config->Write(kDisableSyntaxCheckBeforeSavingConfigKey, disableSyntaxCheckControl->GetValue());
         config->Flush();
         SetStatusText("Global settings updated", 0);
-        if (metaModelFile.CompareTo(metaModelControl->GetValue()) != 0)
+        if (metaModelFile != metaModelControl->GetValue())
         {
             m_metaButton->Enable(true); 
         }
@@ -1913,29 +1913,35 @@ namespace afd
         else if (selectedLanguage == "Rust") languageArg = "rust";
         else                                 languageArg = "cpp";
 
-        // --- Output directory (configured in Settings, defaults to the .afs folder) ---
+        // --- Output directory (configured in Settings) ---
+        // Not configured: the generator decides, its default is the "generated" folder of the
+        // function_designer project. It creates <output>/<language>/<function>/api/<function>_api.h
+        // and <output>/<language>/common/autoapiframework_enums.h below it.
         wxString outputDir;
         wxConfigBase::Get()->Read(kCreateApiOutputDirConfigKey, &outputDir);
-        if (outputDir.IsEmpty() || !wxFileName::DirExists(outputDir))
+        wxString outputArg;
+        if (!outputDir.IsEmpty() && wxFileName::DirExists(outputDir))
         {
-            outputDir = wxFileName(afsPath).GetPath();
+            outputArg = wxString::Format(" --output-dir \"%s\"", outputDir);
         }
 
-        // --- Shared enums directory (configured in Settings, defaults to the output directory) ---
-        // The generator creates the enums file there if it is missing and leaves it
-        // untouched when it already exists for the current meta model version.
+        // --- Shared enums directory (optional, configured in Settings) ---
+        // When it is not set, the generator uses <output>/<language>/common. The enums file is
+        // created there if it is missing and left untouched when it already exists for the
+        // current meta model version.
         wxString enumsDir;
         wxConfigBase::Get()->Read(kCreateApiEnumsDirConfigKey, &enumsDir);
-        if (enumsDir.IsEmpty() || !wxFileName::DirExists(enumsDir))
+        wxString enumsArg;
+        if (!enumsDir.IsEmpty() && wxFileName::DirExists(enumsDir))
         {
-            enumsDir = outputDir;
+            enumsArg = wxString::Format(" --enums-dir \"%s\"", enumsDir);
         }
 
         wxArrayString output, errors;
         const long rc = RunPythonScript(
             "generate_adapter.py",
-            wxString::Format("\"%s\" --language %s --output-dir \"%s\" --enums-dir \"%s\"",
-                             afsPath, languageArg, outputDir, enumsDir),
+            wxString::Format("\"%s\" --language %s%s%s",
+                             afsPath, languageArg, outputArg, enumsArg),
             output, errors);
 
         wxString result;
@@ -1944,14 +1950,14 @@ namespace afd
 
         if (rc == 0)
         {
-            wxMessageBox("Adapter generated successfully (" + selectedLanguage + ").\n\n" + result +
-                         "\nOutput folder: " + outputDir +
-                         "\n(Output folder and enums folder can be changed in Settings.)",
+            wxMessageBox("Function API generated successfully (" + selectedLanguage + ").\n\n" + result +
+                         "\n(Output folder and enums folder can be changed in Settings. "
+                         "Default: the \"generated\" folder of the function_designer project.)",
                          kApplicationName, wxOK | wxICON_INFORMATION, this);
         }
         else
         {
-            wxMessageBox("Adapter generation FAILED.\n\n" + result,
+            wxMessageBox("Function API generation FAILED.\n\n" + result,
                          kApplicationName, wxOK | wxICON_ERROR, this);
         }
     }
@@ -2485,8 +2491,37 @@ namespace afd
     }
 
     // -------------------------------------------------------------------------
-    // Python tooling helpers
+    // Tooling helpers (validation and code generation)
+    //
+    // The GUI uses the stand-alone executables built next to it
+    // (AutoAPIFunctionDesigner_ValidateAFS, AutoAPIFunctionDesigner_CodeGen_1), so no Python
+    // installation with extra packages is needed. If they are missing, it falls back to
+    // running the scripts from tools/ with the Python found at build time.
     // -------------------------------------------------------------------------
+
+    namespace
+    {
+        // Maps a tools/ script to the stand-alone executable built from it.
+        // Returns the full path, or an empty string if the executable is not next to the application.
+        wxString ToolExecutableFor(const wxString& script)
+        {
+            const char* exeName = nullptr;
+            if (script == "validate_afs.py")         exeName = "AutoAPIFunctionDesigner_ValidateAFS";
+            else if (script == "generate_adapter.py") exeName = "AutoAPIFunctionDesigner_CodeGen_1";
+            if (exeName == nullptr)
+            {
+                return wxString();
+            }
+#ifdef _WIN32
+            const wxString suffix = ".exe";
+#else
+            const wxString suffix;
+#endif
+            const wxFileName self(wxStandardPaths::Get().GetExecutablePath());
+            const wxFileName tool(self.GetPath(), wxString::FromUTF8(exeName) + suffix);
+            return tool.FileExists() ? tool.GetFullPath() : wxString();
+        }
+    }
 
     wxString MainFrame::GetPythonExecutable()
     {
@@ -2495,6 +2530,14 @@ namespace afd
 
     bool MainFrame::IsPythonToolingAvailable()
     {
+        // Preferred: the stand-alone executables next to the application.
+        if (!ToolExecutableFor("validate_afs.py").IsEmpty() &&
+            !ToolExecutableFor("generate_adapter.py").IsEmpty())
+        {
+            return true;
+        }
+
+        // Fallback: Python plus the scripts copied to tools/.
         const wxString python = GetPythonExecutable();
         if (python.IsEmpty() || !wxFileName::FileExists(python))
         {
@@ -2508,20 +2551,26 @@ namespace afd
 
     wxString MainFrame::GetPythonUnavailableMessage()
     {
+        const wxString intro =
+            "The validation/generation executables (AutoAPIFunctionDesigner_ValidateAFS and "
+            "AutoAPIFunctionDesigner_CodeGen_1) were not found next to this application.\n"
+            "Build the whole project to create them, or use Python as a fallback:\n\n";
         const wxString python = GetPythonExecutable();
         if (python.IsEmpty())
         {
-            return "Python was not found when this application was built.\n\n"
-                   "Activate your Python virtual environment (with pydantic and jinja2 installed) "
-                   "and re-run CMake to enable meta model validation and adapter generation.";
+            return intro +
+                   "Python was not found when this application was built.\n\n"
+                   "Activate your Python virtual environment (with pydantic, pyyaml and jinja2 installed) "
+                   "and re-run CMake.";
         }
         if (!wxFileName::FileExists(python))
         {
-            return "The Python executable configured at build time is no longer present:\n" +
+            return intro +
+                   "The Python executable configured at build time is no longer present:\n" +
                    python + "\n\nRe-run CMake with the virtual environment activated.";
         }
         const wxString toolsDir = wxString::FromUTF8(AFD_TOOLS_DIR);
-        return "The tools/ directory was not found next to the executable.\n\n"
+        return intro + "The tools/ directory was not found next to the executable.\n\n"
                "Expected: " + toolsDir + "\n\nRebuild the project to copy it.";
     }
 
@@ -2530,6 +2579,13 @@ namespace afd
                                     wxArrayString&  output,
                                     wxArrayString&  errors)
     {
+        // Preferred: the stand-alone executable built from the script (no Python needed).
+        const wxString tool = ToolExecutableFor(script);
+        if (!tool.IsEmpty())
+        {
+            return wxExecute(wxString::Format("\"%s\" %s", tool, args), output, errors, wxEXEC_SYNC);
+        }
+
         const wxString python    = GetPythonExecutable();
         const wxString toolsDir  = wxString::FromUTF8(AFD_TOOLS_DIR);
         const wxString scriptPath = wxFileName(toolsDir, script).GetFullPath();

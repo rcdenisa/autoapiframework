@@ -627,9 +627,18 @@ namespace afd
                 auto it = propertiesWithMandatory.find(property.first.c_str());
                 if (it != propertiesWithMandatory.end())
                 {
-                    if (property.second->GetScalar() == "" || property.second->GetScalar() == " ")
+                    // Agreed rule: a mandatory property must be present, but its value may be
+                    // null/empty ("not yet defined"). Only the properties the code generator
+                    // cannot work without need a real value (same set as in tools/afs_model.py).
+                    const bool needsValue = (property.first == kNameKey)
+                        || (property.first == kFunctionNameKey)
+                        || (property.first == FunctionSpecification::kDataTypeKey)
+                        || (property.first == FunctionSpecification::kRunTypeKey)
+                        || (property.first == "direction");
+                    if (needsValue && (property.second->GetScalar() == "" || property.second->GetScalar() == " "
+                                       || property.second->GetScalar() == "null"))
                     {
-                        error = property.first + " is empty but property is mandatory. (" + itemName + ")";
+                        error = property.first + " is empty but needs a value. (" + itemName + ")";
                         return false;
                     }
                 }

@@ -90,9 +90,10 @@ namespace
         }
     }
 
-    // mandatory_property_is_missing_syntax_error.afs has a null description for
+    // mandatory_property_is_missing_syntax_error.afs has no 'description' key for
     // one data interface.  The validator must reject it because 'description' is
-    // mandatory and its value is empty.
+    // mandatory: the key must be present (its value may be null, see
+    // TestMandatoryPropertyWithNullValueIsAccepted).
     void TestMandatoryPropertyMissingFails(const afd::MetaModel& mm)
     {
         const std::string path =
@@ -102,6 +103,21 @@ namespace
                 "mandatory_property_is_missing_syntax_error.afs was accepted but should fail");
         Require(error.find("mandatory") != std::string::npos,
                 "error message should mention 'mandatory': " + error);
+    }
+
+    // A mandatory property must be present, but its value may be null/empty
+    // (agreed rule: "if it does not exist, a null must be set").
+    void TestMandatoryPropertyWithNullValueIsAccepted(const afd::MetaModel& mm)
+    {
+        std::string yaml = ReadFile(std::string(AFD_EXAMPLES_DIR) + "/speed_hazard_detection.afs");
+        const std::string from = "description: Current vehicle speed value.";
+        const std::size_t pos = yaml.find(from);
+        Require(pos != std::string::npos, "test setup: description line not found in the example");
+        yaml.replace(pos, from.size(), "description:");
+
+        std::string error;
+        Require(Validate(mm, yaml, error),
+                "an empty (null) value of a mandatory property should be accepted: " + error);
     }
 
     // -------------------------------------------------------------------------
@@ -724,6 +740,7 @@ int main()
         // Example file tests        
         {"TestAllExamplesPassValidation", TestAllExamplesPassValidation},
         {"TestMandatoryPropertyMissingFails", TestMandatoryPropertyMissingFails},
+        {"TestMandatoryPropertyWithNullValueIsAccepted", TestMandatoryPropertyWithNullValueIsAccepted},
         // Header validation        
         {"TestNoRootKeyFails", TestNoRootKeyFails},
         {"TestMissingHeaderNameFails", TestMissingHeaderNameFails},

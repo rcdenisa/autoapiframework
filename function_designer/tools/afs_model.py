@@ -23,8 +23,18 @@
 #   from YAML. Any field that does not match the meta model raises a
 #   ValidationError with a clear message — no silent failures.
 #
+# NULL RULE (agreed with the meta model owner):
+#   A mandatory property must always be PRESENT in the .afs file. If its value
+#   does not exist (yet), the key is written with a null/empty value, e.g.
+#       unit:
+#   This is accepted and interpreted as 'empty / unknown' (MR-005). Such
+#   fields are declared 'Optional[...]' WITHOUT a default value: the key is
+#   required, the value may be null. Only the properties the code generator
+#   cannot work without (names, dataType, direction, runType, enumRef ...) must
+#   have a real value. validate_afs.py reports the empty ones as notes.
+#
 # EXPECTATIONS:
-#   - Every mandatory field in the meta model is marked as required here.
+#   - Every mandatory field in the meta model must be present (see NULL RULE).
 #   - Optional fields use Optional[...] = None.
 #   - Enum types match exactly the values defined in the meta model.
 #   - A ValidationError means the .afs file is non-conformant.
@@ -92,9 +102,9 @@ class SupervisionType(str, Enum):
 
 class QualityCodeCompanion(BaseModel):
     """Runtime quality qualifier accompanying a Data interface."""
-    name:     str
-    datatype: str   # expected: "enum"
-    enumRef:  str   # expected: "DataQuality"
+    name:     Optional[str]   # may be empty; recommended: <DataPath>.Qualifier
+    datatype: str             # expected: "enum"
+    enumRef:  str             # expected: "DataQuality"
 
 
 class RuntimeCompanion(BaseModel):
@@ -119,21 +129,22 @@ class DataInterface(BaseModel):
     Note: the field is named 'ASIL' in the .afs YAML. We use Field(alias)
     to avoid a name clash with the ASIL enum class defined above.
     """
+    # Mandatory properties: key required, value may be null (see NULL RULE).
     name:               str
     direction:          Direction
     dataType:           str
-    description:        str
-    unit:               str
-    min:                Optional[Union[float, int]]   = None   # null if not yet defined
-    max:                Optional[Union[float, int]]   = None   # null if not yet defined
-    defaultValue:       Any                           = None
-    resolution:         Optional[Union[float, int]]   = None   # null if not yet defined
-    precision:          Optional[Union[float, int]]   = None   # null if not yet defined
-    FuSa:               bool
-    asil:               Optional[ASIL] = Field(default=None, alias="ASIL")
-    minUpdatePeriodMs:  int
-    accuracy:           Optional[str]                 = None   # null if not yet defined
-    protectionRequired: bool
+    description:        Optional[str]
+    unit:               Optional[str]
+    min:                Optional[Union[float, int]]
+    max:                Optional[Union[float, int]]
+    defaultValue:       Any
+    resolution:         Optional[Union[float, int]]
+    precision:          Optional[Union[float, int]]
+    FuSa:               Optional[bool]
+    asil:               Optional[ASIL] = Field(default=None, alias="ASIL")   # not mandatory
+    minUpdatePeriodMs:  Optional[int]
+    accuracy:           Optional[str]
+    protectionRequired: Optional[bool]
     runtimeCompanion:   Optional[RuntimeCompanion]    = None
 
     model_config = {"populate_by_name": True}
@@ -147,12 +158,12 @@ class ParameterInterface(BaseModel):
     name:         str
     dataType:     str
     defaultValue: Any
-    description:  str
-    unit:         str
-    tunable:      bool
-    min:          Optional[Union[float, int]] = None
-    max:          Optional[Union[float, int]] = None
-    dimensions:   Optional[Any] = None   # e.g. [10] or [7, 10]
+    description:  Optional[str]
+    unit:         Optional[str]
+    tunable:      Optional[bool]
+    min:          Optional[Union[float, int]]
+    max:          Optional[Union[float, int]]
+    dimensions:   Optional[Any] = None   # not mandatory; e.g. [10] or [7, 10]
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +186,7 @@ class LogicalSupervision(BaseModel):
 
 
 class Supervision(BaseModel):
-    required: bool
+    required: Optional[bool]
     type:     Optional[List[str]]              = None  # alive | deadline | logical
     alive:    Optional[AliveSupervision]       = None
     deadline: Optional[DeadlineSupervision]    = None
@@ -209,10 +220,10 @@ class SchedulingEntry(BaseModel):
     """
     functionName:       str
     runType:            RunType
-    description:        str
-    implementedASIL:    ASIL
-    executionResult:    ExecutionResult
-    supervision:        Supervision
+    description:        Optional[str]
+    implementedASIL:    Optional[ASIL]
+    executionResult:    Optional[ExecutionResult]
+    supervision:        Optional[Supervision]
     cycleTimeMs:        Optional[float] = None
     previousRunnableRef: Optional[str] = None
     schedulingPolicy:   Optional[str]  = None
@@ -239,9 +250,9 @@ class ErrorInterface(BaseModel):
     """
     name:             str
     dataType:         str
-    description:      str
+    description:      Optional[str]
     severity:         Optional[ErrorSeverity] = None
-    maturationTimeMs: float
+    maturationTimeMs: Optional[float]
     resetTimeMs:      Optional[float]         = None
     resetCondition:   Optional[str]           = None
     dependencyRefs:   Optional[List[str]]     = None
@@ -269,7 +280,7 @@ class FunctionSpecificationContent(BaseModel):
     name:           str
     version:        str
     metaModelRef:   MetaModelRef
-    description:    str
+    description:    Optional[str]
     dataInterfaces: List[DataInterface]         = Field(default_factory=list)
     parameters:     List[ParameterInterface]    = Field(default_factory=list)
     scheduling:     List[SchedulingEntry]       = Field(default_factory=list)

@@ -84,6 +84,10 @@ if(wxWidgets_FOUND)
 elseif(ACD_FETCH_WXWIDGETS)
     message(STATUS "wxWidgets not found - building it from source (this takes a while on the first run)")
     include(FetchContent)
+    # wxWidgets 3.2.x declares a CMake minimum below 3.5, which CMake 4+ rejects.
+    if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    endif()
     set(wxBUILD_SHARED OFF CACHE BOOL "" FORCE)
     set(wxBUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(wxBUILD_SAMPLES OFF CACHE BOOL "" FORCE)
@@ -197,20 +201,22 @@ add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
 add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
     DEPENDS
         "${AFD_TOOLS_SOURCE_DIR}/afs_model.py"
+        "${AFD_TOOLS_SOURCE_DIR}/afs_common.py"
         "${AFD_TOOLS_SOURCE_DIR}/validate_afs.py"
         "${AFD_TOOLS_SOURCE_DIR}/generate_adapter.py"
         "${AFD_TOOLS_SOURCE_DIR}/requirements.txt"
-        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.hpp.jinja2"
-        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.cpp.jinja2"
-        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.h.jinja2"
-        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.c.jinja2"
-        "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.rs.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/api.hpp.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/api_c.h.jinja2"
+        "${AFD_TOOLS_SOURCE_DIR}/templates/api.rs.jinja2"
         "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.hpp.jinja2"
         "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums_c.h.jinja2"
         "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.rs.jinja2"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${AFD_TOOLS_SOURCE_DIR}/afs_model.py"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/afs_model.py"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AFD_TOOLS_SOURCE_DIR}/afs_common.py"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/afs_common.py"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${AFD_TOOLS_SOURCE_DIR}/validate_afs.py"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/validate_afs.py"
@@ -223,20 +229,14 @@ add_custom_command(TARGET AutoAPIFunctionDesigner POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.hpp.jinja2"
-            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.hpp.jinja2"
+            "${AFD_TOOLS_SOURCE_DIR}/templates/api.hpp.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/api.hpp.jinja2"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.cpp.jinja2"
-            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.cpp.jinja2"
+            "${AFD_TOOLS_SOURCE_DIR}/templates/api_c.h.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/api_c.h.jinja2"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.h.jinja2"
-            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter_c.h.jinja2"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter_c.c.jinja2"
-            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter_c.c.jinja2"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${AFD_TOOLS_SOURCE_DIR}/templates/adapter.rs.jinja2"
-            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/adapter.rs.jinja2"
+            "${AFD_TOOLS_SOURCE_DIR}/templates/api.rs.jinja2"
+            "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/api.rs.jinja2"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${AFD_TOOLS_SOURCE_DIR}/templates/autoapiframework_enums.hpp.jinja2"
             "$<TARGET_FILE_DIR:AutoAPIFunctionDesigner>/tools/templates/autoapiframework_enums.hpp.jinja2"
@@ -291,6 +291,97 @@ else()
     target_compile_options(AfsFileParser PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 install(TARGETS AfsFileParser RUNTIME DESTINATION bin)
+
+# ---------------------------------------------------------------------------
+# Command-line tools written in Python and frozen with PyInstaller. They are
+# built with the normal build, into the same bin/ directory as
+# AutoAPIFunctionDesigner_SyntaxCheck and AfsFileParser:
+#   AutoAPIFunctionDesigner_ValidateAFS <file.afs>      full validation
+#   AutoAPIFunctionDesigner_CodeGen_1   <file.afs> ...  API/skeleton generation
+# ---------------------------------------------------------------------------
+option(AFD_BUILD_PYTHON_TOOLS "Build the stand-alone ValidateAFS and CodeGen_1 executables (needs Python 3.9-3.14 and internet on first build)" ON)
+set(AFD_TOOL_PYTHON "" CACHE FILEPATH "Python 3.9-3.14 used to build the Python tools (auto-detected when empty)")
+
+function(afd_find_tool_python result)
+    set(candidates "")
+    if(AFD_TOOL_PYTHON)
+        list(APPEND candidates "${AFD_TOOL_PYTHON}")
+    endif()
+    if(WIN32)
+        # The py launcher knows every installed interpreter.
+        foreach(version 3.13 3.12 3.11 3.10 3.14 3.9)
+            execute_process(COMMAND py -${version} -c "import sys;print(sys.executable)"
+                            OUTPUT_VARIABLE found RESULT_VARIABLE rc
+                            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(rc EQUAL 0 AND found)
+                list(APPEND candidates "${found}")
+            endif()
+        endforeach()
+    endif()
+    if(AFD_PYTHON_EXECUTABLE)
+        list(APPEND candidates "${AFD_PYTHON_EXECUTABLE}")
+    endif()
+    foreach(name python3 python)
+        find_program(afd_candidate_${name} NAMES ${name})
+        if(afd_candidate_${name})
+            list(APPEND candidates "${afd_candidate_${name}}")
+        endif()
+    endforeach()
+
+    foreach(candidate IN LISTS candidates)
+        # Needs a supported version plus venv/ensurepip (missing in e.g. MSYS2 Python).
+        execute_process(COMMAND "${candidate}" -c
+                "import sys, venv, ensurepip; sys.exit(0 if (3, 9) <= sys.version_info[:2] < (3, 15) else 1)"
+                RESULT_VARIABLE rc OUTPUT_QUIET ERROR_QUIET)
+        if(rc EQUAL 0)
+            set(${result} "${candidate}" PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+    set(${result} "" PARENT_SCOPE)
+endfunction()
+
+if(AFD_BUILD_PYTHON_TOOLS)
+    afd_find_tool_python(AFD_TOOL_PYTHON_FOUND)
+    if(AFD_TOOL_PYTHON_FOUND)
+        message(STATUS "Python tools (ValidateAFS, CodeGen_1): building with ${AFD_TOOL_PYTHON_FOUND}")
+        file(GLOB AFD_TEMPLATE_FILES CONFIGURE_DEPENDS "${AFD_TOOLS_SOURCE_DIR}/templates/*.jinja2")
+
+        # afd_add_python_exe(<target> <script>) freezes tools/<script> into bin/<target>(.exe)
+        function(afd_add_python_exe target script)
+            set(exe "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${target}${CMAKE_EXECUTABLE_SUFFIX}")
+            add_custom_command(
+                OUTPUT "${exe}"
+                COMMAND "${AFD_TOOL_PYTHON_FOUND}" "${AFD_TOOLS_SOURCE_DIR}/build_exe.py"
+                        --script "${script}" --name "${target}"
+                        --output-dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+                        --work-dir "${CMAKE_BINARY_DIR}/python_tools_build"
+                DEPENDS
+                    "${AFD_TOOLS_SOURCE_DIR}/build_exe.py"
+                    "${AFD_TOOLS_SOURCE_DIR}/afs_common.py"
+                    "${AFD_TOOLS_SOURCE_DIR}/afs_model.py"
+                    "${AFD_TOOLS_SOURCE_DIR}/validate_afs.py"
+                    "${AFD_TOOLS_SOURCE_DIR}/generate_adapter.py"
+                    "${AFD_TOOLS_SOURCE_DIR}/requirements.txt"
+                    "${AFD_TOOLS_SOURCE_DIR}/requirements-build.txt"
+                    ${AFD_TEMPLATE_FILES}
+                COMMENT "Building ${target} (PyInstaller)"
+                VERBATIM)
+            add_custom_target(${target} ALL DEPENDS "${exe}")
+            install(PROGRAMS "${exe}" DESTINATION bin)
+            set(${target}_EXE "${exe}" PARENT_SCOPE)
+        endfunction()
+
+        afd_add_python_exe(AutoAPIFunctionDesigner_ValidateAFS validate_afs.py)
+        afd_add_python_exe(AutoAPIFunctionDesigner_CodeGen_1 generate_adapter.py)
+        # Both share one virtual environment: never build them in parallel.
+        add_dependencies(AutoAPIFunctionDesigner_CodeGen_1 AutoAPIFunctionDesigner_ValidateAFS)
+    else()
+        message(WARNING
+            "ValidateAFS and CodeGen_1 are not built: no Python 3.9-3.14 with venv found. "
+            "Install one or pass -DAFD_TOOL_PYTHON=<path to python>.")
+    endif()
+endif()
 
 if(BUILD_TESTING)
     add_executable(afs_file_parser_tests
@@ -396,4 +487,67 @@ if(BUILD_TESTING)
         set_tests_properties(syntax_check_cli_no_args PROPERTIES
                              PASS_REGULAR_EXPRESSION "Usage:")
     endif() #(AFD_BUILD_APP)
+
+    # CLI tests for the Python tools, same style as the syntax check tests.
+    if(TARGET AutoAPIFunctionDesigner_ValidateAFS)
+        set(VA_EXE "${AutoAPIFunctionDesigner_ValidateAFS_EXE}")
+        set(CG_EXE "${AutoAPIFunctionDesigner_CodeGen_1_EXE}")
+        set(AT_EX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+
+        add_test(NAME validate_afs_cli_speed_hazard
+                 COMMAND "${VA_EXE}" "${AT_EX_DIR}/speed_hazard_detection.afs")
+        set_tests_properties(validate_afs_cli_speed_hazard PROPERTIES
+                             PASS_REGULAR_EXPRESSION "passed validation")
+
+        add_test(NAME validate_afs_cli_mandatory_missing
+                 COMMAND "${VA_EXE}" "${AT_EX_DIR}/mandatory_property_is_missing_syntax_error.afs")
+        set_tests_properties(validate_afs_cli_mandatory_missing PROPERTIES
+                             PASS_REGULAR_EXPRESSION "FAILED")
+
+        add_test(NAME validate_afs_cli_missing_file COMMAND "${VA_EXE}" "nonexistent_file.afs")
+        set_tests_properties(validate_afs_cli_missing_file PROPERTIES
+                             PASS_REGULAR_EXPRESSION "File not found")
+
+        add_test(NAME validate_afs_cli_help COMMAND "${VA_EXE}" --help)
+        set_tests_properties(validate_afs_cli_help PROPERTIES
+                             PASS_REGULAR_EXPRESSION "usage: AutoAPIFunctionDesigner_ValidateAFS")
+
+        add_test(NAME codegen_1_clean
+                 COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/codegen_1_test_out")
+        set_tests_properties(codegen_1_clean PROPERTIES FIXTURES_SETUP codegen_1_clean)
+
+        add_test(NAME codegen_1_cli_cpp
+                 COMMAND "${CG_EXE}" "${AT_EX_DIR}/speed_hazard_detection.afs"
+                         --language cpp --output-dir "${CMAKE_BINARY_DIR}/codegen_1_test_out")
+        set_tests_properties(codegen_1_cli_cpp PROPERTIES
+                             FIXTURES_REQUIRED codegen_1_clean
+                             FIXTURES_SETUP codegen_1_generated
+                             PASS_REGULAR_EXPRESSION "Generated: .*speed_hazard_detection[/\\\\]api[/\\\\]speed_hazard_detection_api\\.h")
+
+        # The generated tree must have the agreed layout: only the api header and the shared enums.
+        add_test(NAME codegen_1_layout
+                 COMMAND ${CMAKE_COMMAND}
+                         -DROOT=${CMAKE_BINARY_DIR}/codegen_1_test_out
+                         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_codegen_1_layout.cmake")
+        set_tests_properties(codegen_1_layout PROPERTIES FIXTURES_REQUIRED codegen_1_generated)
+
+        # api.h + enums must compile together (checked with the C++ compiler used for this build).
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME codegen_1_api_compiles
+                     COMMAND "${CMAKE_CXX_COMPILER}" -std=c++17 -Wall -Wextra -Wpedantic -Werror
+                             -Wno-pragma-once-outside-header -fsyntax-only -x c++
+                             "${CMAKE_BINARY_DIR}/codegen_1_test_out/cpp/speed_hazard_detection/api/speed_hazard_detection_api.h")
+            set_tests_properties(codegen_1_api_compiles PROPERTIES FIXTURES_REQUIRED codegen_1_generated)
+        endif()
+
+        add_test(NAME codegen_1_cli_invalid_afs
+                 COMMAND "${CG_EXE}" "${AT_EX_DIR}/mandatory_property_is_missing_syntax_error.afs"
+                         --output-dir "${CMAKE_BINARY_DIR}/codegen_1_test_out")
+        set_tests_properties(codegen_1_cli_invalid_afs PROPERTIES
+                             PASS_REGULAR_EXPRESSION "Generation aborted")
+
+        add_test(NAME codegen_1_cli_help COMMAND "${CG_EXE}" --help)
+        set_tests_properties(codegen_1_cli_help PROPERTIES
+                             PASS_REGULAR_EXPRESSION "usage: AutoAPIFunctionDesigner_CodeGen_1")
+    endif() #(TARGET AutoAPIFunctionDesigner_ValidateAFS)
 endif() #(BUILD_TESTING)

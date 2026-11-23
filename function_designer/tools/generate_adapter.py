@@ -11,47 +11,45 @@
 # SPDX-License-Identifier: Apache-2.0
 # *******************************************************************************
 #
-# generate_adapter.py
+# generate_adapter.py  =  Code Generator 1 (executable: AutoAPIFunctionDesigner_CodeGen_1)
 #
 # PURPOSE:
-#   Reads a validated .afs file and generates a C++ adapter header using
-#   the Jinja2 template in templates/adapter.hpp.jinja2.
-#   This is the proof-of-concept for the AutoAPI auto code generation workflow:
+#   Reads an .afs file, validates it and generates the Function API
+#   (interface contract) with the Jinja2 templates in templates/api*.jinja2:
 #
-#     .afs (YAML spec)  →  Python (validate + parse)  →  Jinja2  →  C++ header
+#     .afs (YAML spec)  ->  Python (validate + parse)  ->  Jinja2  ->  <name>_api.h / .rs
+#
+#   Only the "api" part of the complete generated tree belongs to Code Generator 1:
+#
+#     generated/
+#       cpp/
+#         common/autoapiframework_enums.h
+#         speed_hazard_detection/
+#           api/         speed_hazard_detection_api.h     <- Code Generator 1 (this script)
+#           adapter/     speed_hazard_detection_fad.h/.cpp <- Code Generator 2 (not here)
+#           middleware/  speed_hazard_detection_mw.h/.cpp  <- Code Generator 3 (not here)
+#       c/ and rust/ use the same layout (files: _api.h and _api.rs).
 #
 # EXPECTATIONS:
-#   - The generated header contains Inputs, Outputs, Parameters structs.
-#   - The generated header contains an IAdapter interface with one virtual
-#     method per scheduling runnable.
-#   - The generated file is placed next to the .afs file by default, or
-#     in the directory specified with --output-dir.
+#   - Only <function_name>/api/<function_name>_api.<ext> and common/ are written.
+#   - The api header includes the shared enums file with a relative path, so
+#     the generated files compile without extra include directories.
 #   - The script validates the .afs before generating (fail fast).
-#   - Exit code 0 on success, 1 on any error.
+#   - Exit code 0 on success, 1 on a failed validation/generation, 2 on a usage error.
 #
 # USAGE:
-#   python generate_adapter.py <path/to/file.afs> [--language cpp|rust] [--output-dir <dir>]
+#   Default output folder (if --output-dir is not given): "generated" in the function_designer
+#   project folder, otherwise in the current directory.
+#
+#   python generate_adapter.py <path/to/file.afs> [--language cpp|c|rust]
+#                              [--output-dir <dir>] [--enums-dir <dir>] [--skip-validation]
 #   python generate_adapter.py ../examples/speed_hazard_detection.afs
-#   python generate_adapter.py ../examples/speed_hazard_detection.afs --language rust
-#   python generate_adapter.py ../examples/speed_hazard_detection.afs --language cpp --output-dir ./generated
-#
-# WHAT GETS GENERATED:
-#   C++ (--language cpp):
-#     <FunctionName>_adapter.hpp
-#       - namespace <FunctionName>
-#       - struct Inputs / Outputs / Parameters
-#       - DefaultParameters() constexpr factory
-#       - class IAdapter with pure virtual methods per runnable
-#
-#   Rust (--language rust):
-#     <function_name>_adapter.rs
-#       - pub struct Inputs / Outputs / Parameters
-#       - impl Default for Parameters
-#       - pub trait Adapter with methods per runnable
-
+#   python generate_adapter.py ../examples/speed_hazard_detection.afs --language rust --output-dir ./generated
 import argparse
+import os
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -59,6 +57,9 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).parent))
 from afs_model import FunctionSpecificationFile, Direction
+from afs_common import (EXIT_FAILED, EXIT_OK, EXIT_USAGE, VERSION, HelpFormatter,
+                        configure_console, exe_dir, parse_args, resolve_afs_path)
+import validate_afs
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +342,22 @@ def _check_and_generate_enums(
     return enums_path, action
 
 
+# language -> (template, file extension of the api file)
+_LANGUAGES = {
+    "cpp":  ("api.hpp.jinja2",   "h"),
+    "c":    ("api_c.h.jinja2",   "h"),
+    "rust": ("api.rs.jinja2",    "rs"),
+}
+
+
+def _relative_include(target: Path, from_dir: Path) -> str:
+    """Path of `target` relative to `from_dir`, with forward slashes (for #include)."""
+    try:
+        return os.path.relpath(target, from_dir).replace(os.sep, "/")
+    except ValueError:  # e.g. different drives on Windows
+        return target.name
+
+
 def _compute_cpp_alignments(inputs, outputs, errors, params):
     """
     Compute column widths for aligned C++ declarations matching Thomas P. style.
@@ -380,10 +397,11 @@ def _compute_cpp_alignments(inputs, outputs, errors, params):
 def generate(afs_path: Path, output_dir: Path, language: str = "cpp",
              enums_dir: Path = None) -> list:
     """
-    Validates and generates adapter file(s) from an .afs file.
-    language:  "cpp" generates .h + .cpp, "c" generates .h + .c, "rust" generates .rs
-    enums_dir: directory for the shared enums file. Defaults to output_dir if not specified.
-               Should point to a fixed framework include directory shared across all adapters.
+    Code Generator 1: generates the Function API (interface contract) from an .afs file.
+    language:  "cpp" and "c" generate <name>_api.h, "rust" generates <name>_api.rs
+    output_dir: root of the generated tree, files go to
+               <output_dir>/<language>/<name>/api/ (see the layout in the module header).
+    enums_dir: directory for the shared enums file. Defaults to <output_dir>/<language>/common.
     Returns a list of generated file paths.
     Raises SystemExit on any error.
     """
@@ -412,35 +430,34 @@ def generate(afs_path: Path, output_dir: Path, language: str = "cpp",
     params  = spec.parameters
     errors  = spec.errors or []
 
-    # --- Select templates and output filenames by language ---
+    # A parameter constant needs a value: an empty (null) defaultValue is accepted by the
+    # validation (MR-005: unknown stays null) but no value may be invented for the code.
+    no_default = [p.name for p in params if p.defaultValue is None]
+    if no_default:
+        print(f"ERROR: {afs_path.name}: cannot generate code, defaultValue is empty (null) for "
+              f"parameter(s): {', '.join(no_default)}", file=sys.stderr)
+        raise SystemExit(1)
+    # --- Select template, output folder and file name by language ---
+    # Code Generator 1 only generates the Function API (interface contract):
+    #   <output_dir>/<language>/common/autoapiframework_enums.<ext>      (shared by all functions)
+    #   <output_dir>/<language>/<function_name>/api/<function_name>_api.<ext>
+    # The adapter/ (Code Generator 2) and middleware/ (Code Generator 3) folders are not created here.
     base_name = _to_snake_case(spec.name)
 
-    if language == "cpp":
-        templates_and_files = [
-            ("adapter.hpp.jinja2",  f"{spec.name}.h"),
-            ("adapter.cpp.jinja2",  f"{spec.name}.cpp"),
-        ]
-    elif language == "c":
-        templates_and_files = [
-            ("adapter_c.h.jinja2",  f"{spec.name}.h"),
-            ("adapter_c.c.jinja2",  f"{spec.name}.c"),
-        ]
-    elif language == "rust":
-        templates_and_files = [
-            ("adapter.rs.jinja2",   f"{base_name}.rs"),
-        ]
-    else:
+    if language not in _LANGUAGES:
         print(f"ERROR: Unknown language '{language}'. Use cpp, c, or rust.", file=sys.stderr)
         raise SystemExit(1)
+    template_name, api_extension = _LANGUAGES[language]
+    output_filename = f"{base_name}_api.{api_extension}"
 
     env = _build_jinja_env()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    language_root = output_dir / language
+    api_dir = language_root / base_name / "api"
+    api_dir.mkdir(parents=True, exist_ok=True)
 
-    # enums_dir defaults to output_dir if not specified
-    resolved_enums_dir = enums_dir if enums_dir else output_dir
+    # enums_dir defaults to <output_dir>/<language>/common if not specified
+    resolved_enums_dir = enums_dir if enums_dir else language_root / "common"
     resolved_enums_dir.mkdir(parents=True, exist_ok=True)
-
-    generated = []
 
     # --- Step 1: Ensure shared enums file is present and up to date ---
     enums_path, enums_action = _check_and_generate_enums(
@@ -458,6 +475,9 @@ def generate(afs_path: Path, output_dir: Path, language: str = "cpp",
         else:
             print(f"Enums OK      : {enums_path}  (up to date)")
 
+    # Include path of the enums file as seen from the api header (e.g. ../../common/autoapiframework_enums.h)
+    enums_include = _relative_include(enums_path, api_dir) if enums_path else "autoapiframework_enums.h"
+
     # Compute C++ alignment widths (only relevant for cpp template)
     mem_type_col, mem_name_col, param_type_col, param_name_col = \
         _compute_cpp_alignments(inputs, outputs, errors, params)
@@ -465,61 +485,130 @@ def generate(afs_path: Path, output_dir: Path, language: str = "cpp",
     # Unique tunable values for parameter comment
     param_tunable_str = ", ".join(sorted(set(str(p.tunable).lower() for p in params))) if params else ""
 
-    for template_name, output_filename in templates_and_files:
-        context = {
-            "spec":             spec,
-            "inputs":           inputs,
-            "outputs":          outputs,
-            "params":           params,
-            "errors":           errors,
-            "filename":         output_filename,
-            "source_file":      afs_path.name,
-            "language":         language,
-            # C++ alignment widths
-            "mem_type_col":     mem_type_col,
-            "mem_name_col":     mem_name_col,
-            "param_type_col":   param_type_col,
-            "param_name_col":   param_name_col,
-            "param_tunable_str": param_tunable_str,
-        }
-        try:
-            template = env.get_template(template_name)
-            rendered = template.render(**context)
-        except Exception as exc:
-            print(f"ERROR: Template '{template_name}' rendering failed: {exc}", file=sys.stderr)
-            raise SystemExit(1)
+    context = {
+        "spec":             spec,
+        "inputs":           inputs,
+        "outputs":          outputs,
+        "params":           params,
+        "errors":           errors,
+        "filename":         output_filename,
+        "source_file":      afs_path.name,
+        "language":         language,
+        "enums_include":    enums_include,
+        # C++ alignment widths
+        "mem_type_col":     mem_type_col,
+        "mem_name_col":     mem_name_col,
+        "param_type_col":   param_type_col,
+        "param_name_col":   param_name_col,
+        "param_tunable_str": param_tunable_str,
+    }
+    try:
+        template = env.get_template(template_name)
+        rendered = template.render(**context)
+    except Exception as exc:
+        print(f"ERROR: Template '{template_name}' rendering failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
-        output_path = output_dir / output_filename
-        output_path.write_text(rendered, encoding="utf-8")
-        generated.append(output_path)
-
-    return generated
+    output_path = api_dir / output_filename
+    output_path.write_text(rendered, encoding="utf-8")
+    return [output_path]
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-def main() -> int:
+_PROG = "AutoAPIFunctionDesigner_CodeGen_1"
+
+_DESCRIPTION = """\
+Code Generator 1: generates the Function API (interface contract) in C++, C or
+Rust from an AutoAPI function specification file (.afs). The file is fully
+validated first (structure, types, enums and semantic rules); nothing is
+written if it is invalid.
+
+The adapter/ (Function Adapter) and middleware/ (Middleware Abstraction) parts
+of the generated tree belong to Code Generator 2 and 3 and are not created here.
+"""
+
+_EPILOG = """\
+generated files (<out> = --output-dir, default: the "generated" folder of the
+function_designer project, or of the current directory if that is not found):
+  <out>/cpp/common/autoapiframework_enums.h
+  <out>/cpp/<function_name>/api/<function_name>_api.h
+  <out>/c/common/autoapiframework_enums.h
+  <out>/c/<function_name>/api/<function_name>_api.h
+  <out>/rust/common/autoapiframework_enums.rs
+  <out>/rust/<function_name>/api/<function_name>_api.rs
+
+(<function_name> is the function name in snake_case, e.g. speed_hazard_detection.)
+The shared enums file is created if missing and regenerated only when the
+meta model version changed.
+
+examples:
+  AutoAPIFunctionDesigner_CodeGen_1 speed_hazard_detection.afs
+  AutoAPIFunctionDesigner_CodeGen_1 speed_hazard_detection.afs --language rust --output-dir out
+  AutoAPIFunctionDesigner_CodeGen_1 f.afs --output-dir out --enums-dir shared/include
+
+A file that is not found at the given path is also looked up next to the
+executable.
+
+exit codes:
+  0  code generated
+  1  validation or generation failed
+  2  usage error (wrong arguments, file not found)
+"""
+
+
+def _is_project_root(folder: Path) -> bool:
+    """True for the function_designer project folder (its CMakeLists.txt declares the project)."""
+    cmake = folder / "CMakeLists.txt"
+    try:
+        return cmake.is_file() and "project(function_designer" in cmake.read_text(
+            encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return False
+
+
+def default_output_dir(afs_path: Path) -> Path:
+    """
+    Default root of the generated tree when no output folder was chosen:
+    a "generated" folder in the function_designer project folder.
+
+    The project folder is searched upwards from the .afs file first, then from the
+    location of this tool (the executable is built inside the project, e.g.
+    function_designer/build/<preset>/bin). If it cannot be found, the "generated"
+    folder is created in the current working directory.
+    It is never created next to the .afs file.
+    """
+    for start in (afs_path.parent, exe_dir()):
+        for folder in (start, *start.parents):
+            if _is_project_root(folder):
+                return folder / "generated"
+    return Path.cwd() / "generated"
+
+def main(argv: Optional[List[str]] = None) -> int:
+    configure_console()
     parser = argparse.ArgumentParser(
-        description="Generate an adapter file from an AutoAPI .afs function specification."
+        prog=_PROG, description=_DESCRIPTION, epilog=_EPILOG,
+        formatter_class=HelpFormatter,
     )
     parser.add_argument(
         "afs_file",
         type=Path,
+        metavar="file.afs",
         help="Path to the .afs function specification file.",
     )
     parser.add_argument(
         "--language",
         choices=["cpp", "c", "rust"],
         default="cpp",
-        help="Target language: cpp (.h + .cpp), c (.h + .c), rust (.rs). Default: cpp.",
+        help="Target language: cpp (_api.h), c (_api.h), rust (_api.rs). Default: cpp.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory for the generated files. Defaults to the directory of the .afs file.",
+        help="Root of the generated tree (<language>/<function_name>/api/...). Defaults to the \"generated\" folder of the function_designer project (current directory if the project is not found).",
     )
     parser.add_argument(
         "--enums-dir",
@@ -527,25 +616,43 @@ def main() -> int:
         default=None,
         help=(
             "Directory for the shared autoapiframework_enums file. "
-            "Should be a fixed framework include directory shared across all generated adapters. "
-            "Defaults to --output-dir if not specified."
+            "Should be a fixed framework include directory shared across all generated functions. "
+            "Defaults to <output-dir>/<language>/common."
         ),
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Do not run the full validation (schema + semantic rules) before generating.",
+    )
+    parser.add_argument("--version", action="version", version=f"{_PROG} {VERSION}")
+    args, exit_code = parse_args(parser, argv)
+    if exit_code is not None:
+        return exit_code
 
-    afs_path: Path = args.afs_file.resolve()
-    if not afs_path.exists():
+    afs_path: Path = resolve_afs_path(args.afs_file).resolve()
+    if not afs_path.is_file():
         print(f"ERROR: File not found: {afs_path}", file=sys.stderr)
-        return 1
+        return EXIT_USAGE
 
-    output_dir: Path = args.output_dir.resolve() if args.output_dir else afs_path.parent
+    # Full validation (schema + semantic rules) before any code is generated.
+    if not args.skip_validation:
+        if not validate_afs.validate_file(afs_path):
+            print("\nGeneration aborted: the specification is not valid.", file=sys.stderr)
+            return EXIT_FAILED
+        print()
+
+    output_dir: Path = args.output_dir.resolve() if args.output_dir else default_output_dir(afs_path)
     enums_dir:  Path = args.enums_dir.resolve()  if args.enums_dir  else None
 
-    print(f"Generating {args.language.upper()} adapter for: {afs_path.name}")
-    generated = generate(afs_path, output_dir, language=args.language, enums_dir=enums_dir)
+    print(f"Generating {args.language.upper()} code for: {afs_path.name}")
+    try:
+        generated = generate(afs_path, output_dir, language=args.language, enums_dir=enums_dir)
+    except SystemExit as exc:  # generate() reports its errors on stderr
+        return EXIT_FAILED if exc.code in (None, 0) else int(exc.code)
     for path in generated:
         print(f"Generated: {path}")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

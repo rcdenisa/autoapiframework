@@ -173,6 +173,8 @@ ctest --test-dir build/windows-gcc-debug --output-on-failure
 | --- | --- |
 | `AutoAPIFunctionDesigner` | GUI to create, edit, validate and save `.afs` function specifications against the meta model. |
 | `AutoAPIFunctionDesigner_SyntaxCheck` | Command-line syntax check of an `.afs` file against the meta model. |
+| `AutoAPIFunctionDesigner_ValidateAFS` | Command-line full validation of an `.afs` file (schema and semantic rules, Python). See `tools/README.md`. |
+| `AutoAPIFunctionDesigner_CodeGen_1` | Command-line Code Generator 1: validates an `.afs` file and generates the Function API (`<name>_api.h` / `.rs`) in C++, C or Rust. See `tools/README.md`. |
 | `AfsFileParser` | Command-line parser that reads an `.afs` file and prints the counts of enums, signals, parameters, schedules and errors. |
 | `function_designer_tests` | Unit tests built from `tests/yaml_tests.cpp` and the other sources listed in `CMakeLists.txt`, mainly covering the YAML parser and writer. |
 | `yaml_comment_tests` | Unit tests from `tests/yaml_comment_tests.cpp` that verify YAML comments are preserved during parse/write round trips. |

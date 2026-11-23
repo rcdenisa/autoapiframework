@@ -24,9 +24,10 @@
 #     pointing to exactly what is wrong and where.
 #   - Exit code 0 means all files are valid.
 #   - Exit code 1 means at least one file has validation errors.
+#   - Exit code 2 means a usage error (wrong arguments, file not found).
 #
 # USAGE:
-#   python validate_afs.py <path/to/file.afs> [<path/to/another.afs> ...]
+#   AutoAPIFunctionDesigner_ValidateAFS <path/to/file.afs> [<path/to/another.afs> ...]
 #   python validate_afs.py ../examples/speed_hazard_detection.afs
 #
 # WHAT IT CHECKS:
@@ -40,22 +41,26 @@
 #   Semantic (custom rules):
 #     - MR-FuSa: if FuSa == True, ASIL must be specified
 #     - MR-Schedule: at least one scheduling entry must exist
-#     - MR-Init: an 'init' runnable is expected
-#     - MR-Terminate: a 'terminate' runnable is expected
+#   Advisory (shown, never blocking):
+#     - MR-Init: no 'init' runnable (optional - a function may have none)
+#     - MR-Terminate: no 'terminate' runnable (optional - a function may have none)
 #     - MR-NameUnique: Data interface names must be unique
 #     - MR-ParamUnique: Parameter names must be unique
 
+import argparse
 import sys
 import traceback
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 # Ensure tools/ directory is on the path when called from anywhere
 sys.path.insert(0, str(Path(__file__).parent))
 from afs_model import FunctionSpecificationFile, FunctionSpecificationContent
+from afs_common import (EXIT_FAILED, EXIT_OK, EXIT_USAGE, VERSION, HelpFormatter,
+                        configure_console, parse_args, resolve_afs_path)
 
 
 # ---------------------------------------------------------------------------
@@ -115,18 +120,52 @@ def _semantic_checks(spec: FunctionSpecificationContent) -> List[str]:
     # MR-Schedule: at least one scheduling entry must exist
     if not spec.scheduling:
         errors.append("[MR-Schedule] No scheduling entries found. At least one runnable is required.")
-    else:
-        run_types = {e.runType.value for e in spec.scheduling}
-
-        # MR-Init: an init runnable is expected
-        if "init" not in run_types:
-            errors.append("[MR-Init] No 'init' runnable found in scheduling.")
-
-        # MR-Terminate: a terminate runnable is expected
-        if "terminate" not in run_types:
-            errors.append("[MR-Terminate] No 'terminate' runnable found in scheduling.")
 
     return errors
+
+
+def _advisories(spec: FunctionSpecificationContent) -> List[str]:
+    """
+    Returns advisory messages: things worth a look that do NOT make the file invalid
+    and never block validation or code generation.
+    """
+    notes: List[str] = []
+    run_types = {e.runType.value for e in spec.scheduling}
+
+    # MR-Init / MR-Terminate: not mandatory. A function without init/terminate simply has none.
+    if spec.scheduling and "init" not in run_types:
+        notes.append("[MR-Init] No 'init' runnable in scheduling (optional).")
+    if spec.scheduling and "terminate" not in run_types:
+        notes.append("[MR-Terminate] No 'terminate' runnable in scheduling (optional).")
+    return notes
+
+
+def _print_advisories(notes: List[str]) -> None:
+    if notes:
+        print(YELLOW(f"  Advisory: {len(notes)} hint(s), not blocking:"))
+        for msg in notes:
+            print(f"    - {msg}")
+
+
+def _find_empty_mandatory(obj, path: str = "") -> List[str]:
+    """
+    Returns the paths of mandatory properties whose value is null/empty.
+    Such properties are accepted (the key is present, the value is unknown yet,
+    see the NULL RULE in afs_model.py) but are worth telling the user about.
+    """
+    found: List[str] = []
+    if isinstance(obj, BaseModel):
+        for name, field in type(obj).model_fields.items():
+            value = getattr(obj, name)
+            sub = f"{path}.{name}" if path else name
+            if value is None and field.is_required():
+                found.append(sub)
+            else:
+                found.extend(_find_empty_mandatory(value, sub))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            found.extend(_find_empty_mandatory(item, f"{path}[{i}]"))
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +210,7 @@ def validate_file(path: Path) -> bool:
         print(RED(f"  [SEMANTIC ERRORS] {len(semantic_errors)} semantic rule violation(s):\n"))
         for msg in semantic_errors:
             print(f"  {RED(FAIL)} {msg}")
+        _print_advisories(_advisories(spec))
         return False
 
     # --- Summary on success ---
@@ -186,6 +226,17 @@ def validate_file(path: Path) -> bool:
     print(f"  Runnables  : {len(spec.scheduling)}")
     if spec.errors:
         print(f"  Errors     : {len(spec.errors)} (candidate interface)")
+
+    # Empty mandatory properties are accepted, but reported as a note.
+    empty = _find_empty_mandatory(spec, "functionSpecification")
+    if empty:
+        print(YELLOW(f"  Note: {len(empty)} mandatory propert{'y is' if len(empty) == 1 else 'ies are'} "
+                     "empty (null) - accepted, interpreted as 'not yet defined':"))
+        for p in empty[:15]:
+            print(f"    - {p}")
+        if len(empty) > 15:
+            print(f"    ... and {len(empty) - 15} more")
+    _print_advisories(_advisories(spec))
     return True
 
 
@@ -193,14 +244,53 @@ def validate_file(path: Path) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        print(f"Usage: python {Path(__file__).name} <file.afs> [<file2.afs> ...]")
-        return 1
+_PROG = "AutoAPIFunctionDesigner_ValidateAFS"
 
-    paths = [Path(p) for p in sys.argv[1:]]
+_DESCRIPTION = """\
+Validates AutoAPI function specification files (.afs) against the meta model
+(structure, types, enums and semantic rules). Nothing is written.
+"""
+
+_EPILOG = """\
+examples:
+  AutoAPIFunctionDesigner_ValidateAFS speed_hazard_detection.afs
+  AutoAPIFunctionDesigner_ValidateAFS a.afs b.afs c.afs
+
+A file that is not found at the given path is also looked up next to the
+executable.
+
+exit codes:
+  0  all files are valid
+  1  at least one file is invalid
+  2  usage error (wrong arguments, file not found)
+"""
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=_PROG, description=_DESCRIPTION, epilog=_EPILOG,
+        formatter_class=HelpFormatter,
+    )
+    parser.add_argument("afs_files", type=Path, nargs="+", metavar="file.afs",
+                        help="One or more function specification files.")
+    parser.add_argument("--version", action="version", version=f"{_PROG} {VERSION}")
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    configure_console()
+    args, exit_code = parse_args(_build_parser(), argv)
+    if exit_code is not None:
+        return exit_code
+
+    paths = [resolve_afs_path(p) for p in args.afs_files]
+    missing = [p for p in paths if not p.is_file()]
+    if missing:
+        for p in missing:
+            print(f"ERROR: File not found: {p}", file=sys.stderr)
+        return EXIT_USAGE
+
     all_valid = True
-
     for p in paths:
         try:
             ok = validate_file(p)
@@ -217,7 +307,7 @@ def main() -> int:
     else:
         print(RED(f"Validation FAILED for one or more files."))
 
-    return 0 if all_valid else 1
+    return EXIT_OK if all_valid else EXIT_FAILED
 
 
 if __name__ == "__main__":

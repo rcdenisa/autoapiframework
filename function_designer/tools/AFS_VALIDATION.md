@@ -159,8 +159,8 @@ sense within the AutoAPI meta model.
 | Runnable naming convention | MR-RunnableNaming | `functionName` must follow `<FunctionName>.Init/.Step/.Terminate` |
 | Execution result type | MR-ExecResult | `executionResult.type` must be `FunctionResult`, not `void` |
 | Scheduling present | MR-Schedule | At least one runnable must be defined |
-| Init runnable present | MR-Init | An `init` runnable must exist |
-| Terminate runnable present | MR-Terminate | A `terminate` runnable must exist |
+| Init runnable present | MR-Init | No `init` runnable *(advisory, optional)* |
+| Terminate runnable present | MR-Terminate | No `terminate` runnable *(advisory, optional)* |
 
 > **Errors** stop validation and block code generation.
 > **Warnings** are shown but do not block — the file is still considered valid.
