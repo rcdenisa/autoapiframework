@@ -138,7 +138,9 @@ far as supported by the YAML writer.
 Limitations
 -----------
 
-The 'Create API' functionality is still under development. 
+'Create API' runs Code Generator 1 and generates only the Function API (interface contract)
+in C++, C or Rust; see :doc:`code_generator_1`. The Function Adapter (Code Generator 2) and
+the Middleware Abstraction Layer (Code Generator 3) are still under discussion.
 
 .. tip::
 

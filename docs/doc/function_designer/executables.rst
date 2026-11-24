@@ -44,6 +44,13 @@ Executables
        
        Consequently, the reported counts should be considered informational only and 
        not as proof that the input file is syntactically correct or specification-compliant.  
+   * - ``AutoAPIFunctionDesigner_ValidateAFS.exe``
+     - A command-line tool that fully validates one or more .afs files against the meta model
+       (structure, types, enum values and semantic rules). Built from the Python tooling; no Python
+       installation is needed to run it. See :doc:`afs_validation`.
+   * - ``AutoAPIFunctionDesigner_CodeGen_1.exe``
+     - Code Generator 1: validates an .afs file and generates the Function API (interface contract)
+       in C++, C or Rust. See :doc:`code_generator_1`.
    * - ``function_designer_tests.exe``
      - The test program built from yaml_tests.cpp and the other sources listed in CMakeLists.txt, mainly covering the YAML parser and writer.
    * - ``yaml_comment_tests.exe``

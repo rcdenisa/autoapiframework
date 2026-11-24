@@ -37,6 +37,10 @@ The project requires:
 * A C++17 compiler
 * wxWidgets (included in the Windows build; must be installed separately on Linux)
 * Python with ``vss-tools`` version 6.1.0 (only to add vss signals from Covesa)
+* Python 3.9 - 3.14 with ``venv`` to build the validation and code generation executables
+  (``AutoAPIFunctionDesigner_ValidateAFS``, ``AutoAPIFunctionDesigner_CodeGen_1``). The first
+  build needs internet access to install the Python packages. See :doc:`python_tooling`;
+  configure with ``-DAFD_BUILD_PYTHON_TOOLS=OFF`` to skip them.
 
 The build uses the ``vspec`` executable from ``vss-tools`` to convert Vehicle
 Signal Specification (VSS) files to JSON. Install it in a virtual environment
