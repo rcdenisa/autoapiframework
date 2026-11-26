@@ -320,7 +320,7 @@ the generator never needs to check for missing fields or wrong types.
 |---|---|
 | `tools/validate_afs.py` | Validation script — entry point |
 | `tools/afs_model.py` | Pydantic models mirroring meta model v0.4.1 |
-| `tools/requirements.txt` | Pinned dependencies: `pydantic==2.11.4`, `pyyaml==6.0.2`, `jinja2==3.1.6` |
+| `tools/requirements.txt` | Pinned dependencies: `pydantic==2.12.5`, `pyyaml==6.0.3`, `jinja2==3.1.6` |
 
 When the meta model version changes, only `afs_model.py` needs to be updated.
 The validator automatically picks up the changes — no C++ recompilation required.

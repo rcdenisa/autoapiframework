@@ -66,8 +66,22 @@ def main() -> int:
     if not venv_python.exists():
         _run([sys.executable, "-m", "venv", venv_dir])
 
-    _run([venv_python, "-m", "pip", "install", "--disable-pip-version-check",
-          "-r", TOOLS_DIR / "requirements-build.txt"])
+    # Only prebuilt wheels: building pydantic-core from source would need Rust and a
+    # C compiler, and fails behind proxies that break the Rust download.
+    try:
+        _run([venv_python, "-m", "pip", "install", "--disable-pip-version-check",
+              "--only-binary=:all:", "-r", TOOLS_DIR / "requirements-build.txt"])
+    except subprocess.CalledProcessError:
+        print(f"ERROR: the Python packages could not be installed for Python "
+              f"{sys.version_info.major}.{sys.version_info.minor}.\n"
+              "  - If pip reports 'No matching distribution', the pinned versions in "
+              "requirements.txt have no prebuilt package for this Python version: use "
+              "Python 3.9 - 3.14 (-DAFD_TOOL_PYTHON=<path>) or update requirements.txt.\n"
+              "  - If pip reports a network or SSL error, pip cannot reach PyPI "
+              "(check proxy settings).\n"
+              "  - To skip the tools, configure with -DAFD_BUILD_PYTHON_TOOLS=OFF.",
+              file=sys.stderr)
+        return 1
 
     # Each executable gets its own PyInstaller work area; the venv is shared.
     pyi_dir = work_dir / "pyinstaller" / args.name

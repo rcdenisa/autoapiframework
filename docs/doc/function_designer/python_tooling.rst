@@ -51,14 +51,14 @@ Libraries
      - Version
      - Role
    * - ``pydantic``
-     - 2.11.4
+     - 2.12.5
      - Describes the ``.afs`` content as typed Python classes and validates it
        (mandatory keys, types, enum values, conditional rules).
    * - ``jinja2``
      - 3.1.6
      - Template engine that turns the validated specification into C++, C or Rust code.
    * - ``pyyaml``
-     - 6.0.2
+     - 6.0.3
      - Loads the ``.afs`` YAML content.
    * - ``pyinstaller``
      - 6.16.0
@@ -174,6 +174,11 @@ Both executables are part of the normal CMake build and are written to the same
 - The first build creates a private virtual environment in
   ``<build>/python_tools_build`` and needs internet access for ``pip``. Later builds
   rerun PyInstaller only when the Python sources or templates changed.
+- Only prebuilt packages (wheels) are installed (``pip --only-binary=:all:``); nothing
+  is compiled from source, so no Rust or C compiler is needed. All pinned versions
+  provide wheels for Python 3.9 - 3.14 on Windows and Linux. If pip reports
+  *No matching distribution*, the Python version is not supported by the pinned
+  packages.
 
 Without building, the scripts can be run directly:
 
