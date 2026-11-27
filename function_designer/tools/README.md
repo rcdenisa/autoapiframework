@@ -325,6 +325,6 @@ This is a **proof of concept**. Before treating this as production tooling:
 
 | Package | Version | Role |
 |---------|---------|------|
-| `pydantic` | 2.11.4 | Schema validation and parsing |
-| `pyyaml` | 6.0.2 | YAML loading |
+| `pydantic` | 2.12.5 | Schema validation and parsing |
+| `pyyaml` | 6.0.3 | YAML loading |
 | `jinja2` | 3.1.6 | C++ code generation templates |
