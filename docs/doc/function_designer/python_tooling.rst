@@ -68,6 +68,9 @@ Libraries
 The versions are pinned in ``tools/requirements.txt`` and
 ``tools/requirements-build.txt``.
 
+The sections below summarise the choice. The requirements, the alternatives that were
+evaluated and the reasons for rejecting them are described in :doc:`tool_selection`.
+
 Why Pydantic
 ~~~~~~~~~~~~
 

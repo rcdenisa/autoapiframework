@@ -78,5 +78,6 @@ Function Designer:
    doc/function_designer/executables
    doc/function_designer/yaml_comments
    doc/function_designer/python_tooling
+   doc/function_designer/tool_selection
    doc/function_designer/afs_validation
    doc/function_designer/code_generator_1
